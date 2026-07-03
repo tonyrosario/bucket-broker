@@ -35,3 +35,4 @@ src/                       # lambda handlers + web form  (to be implemented)
 
 Fully serverless / pay-per-use. Idle cost ≈ $0; ~1–2¢ per bucket provision (CodeBuild
 minutes); a few dollars/month at demo volume.
+# bucket-broker
