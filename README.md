@@ -1,4 +1,4 @@
-# aws-s3-self-service
+# bucket-broker
 
 Self-service platform for provisioning golden-path Amazon S3 buckets. A user hits a URL,
 authenticates via an OIDC identity provider (Okta-like, config-driven), and gets a
