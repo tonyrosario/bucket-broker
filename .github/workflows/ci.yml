@@ -35,12 +35,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-      - name: Install gitleaks
+      - name: Install gitleaks (checksum-verified)
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
-          tar -xzf /tmp/gitleaks.tar.gz -C "$HOME/.local/bin" gitleaks
-          chmod +x "$HOME/.local/bin/gitleaks"
+          tmp="$(mktemp -d)"; cd "$tmp"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSfL "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o checksums.txt
+          curl -sSfL "${base}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          grep "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz$" checksums.txt | sha256sum -c -
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          install -m 0755 gitleaks "$HOME/.local/bin/gitleaks"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Scan working tree + history
         run: gitleaks detect --source . --redact --no-banner --verbose
@@ -84,12 +89,18 @@ jobs:
             echo "tf=false" >> "$GITHUB_OUTPUT"
             echo "No Terraform yet — scanners will report clean."
           fi
-      - name: Install tfsec
+      - name: Install tfsec (checksum-verified)
         if: steps.detect.outputs.tf == 'true'
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -sSfL "https://github.com/aquasecurity/tfsec/releases/download/v${TFSEC_VERSION}/tfsec-linux-amd64" -o "$HOME/.local/bin/tfsec"
-          chmod +x "$HOME/.local/bin/tfsec"
+          tmp="$(mktemp -d)"; cd "$tmp"
+          base="https://github.com/aquasecurity/tfsec/releases/download/v${TFSEC_VERSION}"
+          curl -sSfL "${base}/tfsec_${TFSEC_VERSION}_checksums.txt" -o checksums.txt
+          curl -sSfL "${base}/tfsec_${TFSEC_VERSION}_linux_amd64.tar.gz" -o "tfsec_${TFSEC_VERSION}_linux_amd64.tar.gz"
+          grep "tfsec_${TFSEC_VERSION}_linux_amd64.tar.gz$" checksums.txt | sha256sum -c -
+          tar -xzf "tfsec_${TFSEC_VERSION}_linux_amd64.tar.gz" tfsec
+          install -m 0755 tfsec "$HOME/.local/bin/tfsec"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: tfsec
         if: steps.detect.outputs.tf == 'true'
@@ -115,12 +126,17 @@ jobs:
             echo "rego=false" >> "$GITHUB_OUTPUT"
             echo "No Rego policy yet — nothing to test."
           fi
-      - name: Install opa
+      - name: Install opa (checksum-verified)
         if: steps.detect.outputs.rego == 'true'
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -sSfL "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static" -o "$HOME/.local/bin/opa"
-          chmod +x "$HOME/.local/bin/opa"
+          tmp="$(mktemp -d)"; cd "$tmp"
+          base="https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}"
+          curl -sSfL "${base}/opa_linux_amd64_static" -o opa
+          curl -sSfL "${base}/opa_linux_amd64_static.sha256" -o opa.sha256
+          echo "$(awk '{print $1}' opa.sha256)  opa" | sha256sum -c -
+          install -m 0755 opa "$HOME/.local/bin/opa"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: opa fmt (check) + test
         if: steps.detect.outputs.rego == 'true'
@@ -149,7 +165,9 @@ jobs:
           cache: npm
       - name: Install
         if: steps.detect.outputs.node == 'true'
-        run: npm ci
+        # --ignore-scripts: do not execute PR-authored lifecycle hooks
+        # (preinstall/postinstall) on untrusted fork input.
+        run: npm ci --ignore-scripts
       - name: Lint / typecheck / test
         if: steps.detect.outputs.node == 'true'
         run: |

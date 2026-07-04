@@ -2,33 +2,49 @@ name: Prowler AWS security scan (manual)
 
 # Deployed-environment posture scan (ADR-driven security requirement, issue #15).
 # DORMANT until a live AWS account is wired: it authenticates via short-lived
-# GitHub OIDC (no long-lived cloud credentials) using a role provisioned by
-# terraform/modules/ci-oidc. Set the repo variable AWS_DEPLOY_ROLE_ARN to enable.
-# See docs/ci.md.
+# GitHub OIDC (no long-lived cloud credentials) using a role provisioned by the
+# OIDC deploy-role blueprint in docs/ci.md. Set the repo variable
+# AWS_DEPLOY_ROLE_ARN to enable. See docs/ci.md.
 
 on:
   workflow_dispatch:
     inputs:
       severity:
-        description: Minimum severity to fail on
-        default: "critical,high"
-        required: false
+        description: Space-separated minimum severities to fail on
+        type: choice
+        default: "critical high"
+        options:
+          - "critical high"
+          - "critical"
+          - "high"
+          - "critical high medium"
 
+# Least privilege at the workflow level: read-only. The OIDC token permission is
+# granted only to the job that needs it (below).
 permissions:
-  id-token: write # OIDC token to assume the AWS role
   contents: read
+
+env:
+  PROWLER_VERSION: "5.32.0"
 
 jobs:
   prowler:
     name: Prowler scan
     runs-on: ubuntu-latest
+    # Bind to the `dev` GitHub Environment so the OIDC token's `sub` claim is
+    # `repo:tonyrosario/bucket-broker:environment:dev`, matching the trust policy
+    # in docs/ci.md. Gate the environment with required reviewers for an audit trail.
+    environment: dev
+    permissions:
+      id-token: write # OIDC token to assume the AWS role (job-scoped)
+      contents: read
     steps:
       - name: Guard — require a wired AWS account
         run: |
           if [ -z "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ]; then
             echo "AWS_DEPLOY_ROLE_ARN is not set."
             echo "bucket-broker is build/plan-only until a live AWS account exists (see docs/ci.md)."
-            echo "Provision terraform/modules/ci-oidc, then set the repo variable to enable this scan."
+            echo "Provision the OIDC deploy role, then set the repo variable to enable this scan."
             exit 1
           fi
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -36,11 +52,17 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-      - name: Install Prowler
-        run: pipx install prowler
+      - name: Install Prowler (pinned)
+        run: pipx install "prowler==${PROWLER_VERSION}"
       - name: Run Prowler
+        # SEVERITY is passed via env (never interpolated into the shell line) and
+        # split with `read -a` so a crafted dispatch input cannot inject a command.
+        env:
+          SEVERITY: ${{ github.event.inputs.severity }}
         run: |
+          set -euo pipefail
+          read -r -a sev <<< "$SEVERITY"
           prowler aws \
-            --severity ${{ github.event.inputs.severity }} \
+            --severity "${sev[@]}" \
             --status FAIL \
             --ignore-exit-code-3

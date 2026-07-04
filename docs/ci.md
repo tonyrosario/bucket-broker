@@ -16,7 +16,8 @@ yet. As Terraform, Rego, and Node code land, the matching jobs start enforcing a
 | **Node lint + typecheck + test** | `npm ci` then `lint`/`typecheck`/`test` (if present) when `package.json` exists | Lint, type, or test failure |
 
 All third-party tooling is version-pinned (see the `env:` block in `ci.yml`) and every GitHub Action
-is pinned to a full commit SHA.
+is pinned to a full commit SHA. Scanner binaries installed via `curl` (gitleaks, tfsec, opa) are
+**SHA256 checksum-verified** against the projects' published release checksums before use.
 
 ## Making the checks required (branch protection)
 
@@ -38,12 +39,16 @@ Until this exists, agents must not merge (see `AGENTS.md`).
 deployed environment. bucket-broker is **build/plan-only** today (no live AWS account), so the
 workflow guards on the repo variable `AWS_DEPLOY_ROLE_ARN` and exits with guidance until one is set.
 
-It authenticates with **short-lived GitHub OIDC credentials — no long-lived AWS keys in CI**. To
-activate it once an account exists:
+It authenticates with **short-lived GitHub OIDC credentials — no long-lived AWS keys in CI**, and the
+`severity` dispatch input is passed via an environment variable (never interpolated into the shell)
+to prevent script injection. Prowler itself is version-pinned. To activate it once an account exists:
 
 1. Provision the GitHub OIDC provider + a least-privilege deploy role (blueprint below).
-2. Set repo variables `AWS_DEPLOY_ROLE_ARN` (and optionally `AWS_REGION`).
-3. Run the workflow from the Actions tab.
+2. Create a `dev` GitHub Environment with required reviewers. The prowler job binds to it
+   (`environment: dev`) so the OIDC token's `sub` claim is
+   `repo:tonyrosario/bucket-broker:environment:dev`, matching the trust policy below.
+3. Set repo variables `AWS_DEPLOY_ROLE_ARN` (and optionally `AWS_REGION`).
+4. Run the workflow from the Actions tab.
 
 ### OIDC deploy-role blueprint
 
@@ -93,4 +98,4 @@ resource "aws_iam_role" "deploy" {
 ## Tool versions
 
 Pinned in `ci.yml`: terraform `1.9.8`, tfsec `1.28.14`, checkov `3.3.6`, opa `1.18.2`,
-gitleaks `8.30.1`, Node `20`.
+gitleaks `8.30.1`, Node `20`. Pinned in `prowler.yml`: prowler `5.32.0`.
