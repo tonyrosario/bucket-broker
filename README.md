@@ -1,5 +1,7 @@
 # bucket-broker
 
+[![CI](https://github.com/tonyrosario/bucket-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/tonyrosario/bucket-broker/actions/workflows/ci.yml)
+
 Self-service platform for provisioning golden-path Amazon S3 buckets. A user hits a URL,
 authenticates via an OIDC identity provider (Okta-like, config-driven), and gets a
 team-owned, hardened S3 bucket provisioned within a **10-minute SLO** — with audited
@@ -30,6 +32,14 @@ docs/
 terraform/                 # modules + envs   (to be implemented)
 src/                       # lambda handlers + web form  (to be implemented)
 ```
+
+## CI & security gates
+
+Every PR runs the [`ci.yml`](.github/workflows/ci.yml) gate: gitleaks secret scan, Terraform
+`fmt`/`validate`, tfsec + checkov, OPA policy tests, and Node lint/typecheck/test. Jobs no-op
+cleanly on layers that don't exist yet and enforce automatically as code lands. Actions are pinned
+to commit SHAs; tooling versions are pinned. See [`docs/ci.md`](docs/ci.md) — including how to make
+the checks required via a branch-protection ruleset (a human-owned step per `AGENTS.md`).
 
 ## Cost
 
