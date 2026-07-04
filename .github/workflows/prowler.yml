@@ -1,0 +1,46 @@
+name: Prowler AWS security scan (manual)
+
+# Deployed-environment posture scan (ADR-driven security requirement, issue #15).
+# DORMANT until a live AWS account is wired: it authenticates via short-lived
+# GitHub OIDC (no long-lived cloud credentials) using a role provisioned by
+# terraform/modules/ci-oidc. Set the repo variable AWS_DEPLOY_ROLE_ARN to enable.
+# See docs/ci.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      severity:
+        description: Minimum severity to fail on
+        default: "critical,high"
+        required: false
+
+permissions:
+  id-token: write # OIDC token to assume the AWS role
+  contents: read
+
+jobs:
+  prowler:
+    name: Prowler scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard — require a wired AWS account
+        run: |
+          if [ -z "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ]; then
+            echo "AWS_DEPLOY_ROLE_ARN is not set."
+            echo "bucket-broker is build/plan-only until a live AWS account exists (see docs/ci.md)."
+            echo "Provision terraform/modules/ci-oidc, then set the repo variable to enable this scan."
+            exit 1
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Install Prowler
+        run: pipx install prowler
+      - name: Run Prowler
+        run: |
+          prowler aws \
+            --severity ${{ github.event.inputs.severity }} \
+            --status FAIL \
+            --ignore-exit-code-3
