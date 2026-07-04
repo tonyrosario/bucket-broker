@@ -75,6 +75,11 @@ You may not:
 - Change roadmap priorities
 - Work on issues not marked `agent-ready`
 - Introduce dependencies unless explicitly allowed by the issue
+- Install language runtimes (Go, Ruby, Python, Node, etc.). Prebuilt tool
+  binaries (e.g. terraform, tfsec, opa) and packages for an already-present
+  runtime (`pip install` when Python exists, `npm install` when Node exists)
+  are fine; installing a **new language runtime is a human-in-the-loop
+  decision** — stop and comment a blocker instead of installing it yourself
 - Touch secrets, auth, billing, production deploy config, permissions, or
   infrastructure unless explicitly allowed by the issue
 - Expand scope beyond the issue
