@@ -21,17 +21,22 @@ is pinned to a full commit SHA. Scanner binaries installed via `curl` (gitleaks,
 
 ## Making the checks required (branch protection)
 
-The gate only *gates* once the checks are required on `main`. This is a **human-owned** governance
-step (per `AGENTS.md`: branch protection is the human review gate and must not be set or bypassed by
-an agent). Create a ruleset on `main` that:
+The gate only *gates* because the checks are required on `main`. This is a **human-owned**
+governance layer (per `AGENTS.md`: agents must not set, edit, or bypass rulesets or branch
+protection). The active ruleset on `main` (`main-protection`):
 
-- Requires a pull request before merging, with **≥1 human approval**
+- Requires a pull request before merging
 - Requires these status checks to pass: `Secret scan (gitleaks)`, `Terraform fmt + validate`,
   `Terraform security (tfsec + checkov)`, `OPA policy tests`, `Node lint + typecheck + test`
 - Blocks direct pushes, force-pushes, and branch deletion
-- Does **not** allow the actor who opened a PR to satisfy its own required review
+- Has no bypass actors
 
-Until this exists, agents must not merge (see `AGENTS.md`).
+Required approvals are intentionally **0**: GitHub does not let a PR author approve their own
+PR, so a solo repository would deadlock at ≥1. Human review is therefore enforced by policy —
+agents never run `gh pr merge`, never enable auto-merge, and never edit rulesets (see
+`AGENTS.md`) — rather than by the ruleset. If collaborators are ever added, raise
+`required_approving_review_count` to ≥1 and enable "require review from someone other than
+the last pusher".
 
 ## Deployed-environment scanning (Prowler) — dormant until a live account exists
 
