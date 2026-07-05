@@ -149,3 +149,36 @@ describe("POST /buckets — environment variable errors", () => {
     expect(ddbMock.commandCalls(PutItemCommand)).toHaveLength(0);
   });
 });
+
+describe("POST /buckets — AWS SDK failures", () => {
+  test("returns 409 when the requestId already exists (ConditionalCheckFailedException)", async () => {
+    const err = new Error("The conditional request failed");
+    err.name = "ConditionalCheckFailedException";
+    ddbMock.on(PutItemCommand).rejects(err);
+    const res = await handler(makeEvent());
+    expect(res.statusCode).toBe(409);
+    // Never starts an execution if the write was rejected.
+    expect(sfnMock.commandCalls(StartExecutionCommand)).toHaveLength(0);
+  });
+
+  test("returns 500 when the DynamoDB write fails for other reasons", async () => {
+    ddbMock.on(PutItemCommand).rejects(new Error("ProvisionedThroughputExceededException"));
+    const res = await handler(makeEvent());
+    expect(res.statusCode).toBe(500);
+    expect(sfnMock.commandCalls(StartExecutionCommand)).toHaveLength(0);
+  });
+
+  test("returns 500 when Step Functions StartExecution fails", async () => {
+    sfnMock.on(StartExecutionCommand).rejects(new Error("AccessDeniedException"));
+    const res = await handler(makeEvent());
+    expect(res.statusCode).toBe(500);
+    // DynamoDB write still happened before the SFN failure.
+    expect(ddbMock.commandCalls(PutItemCommand)).toHaveLength(1);
+  });
+
+  test("preserves the correlation-id header on an SDK failure response", async () => {
+    ddbMock.on(PutItemCommand).rejects(new Error("boom"));
+    const res = await handler(makeEvent({ headers: { "x-correlation-id": "corr-xyz" } }));
+    expect(res.headers?.["x-correlation-id"]).toBe("corr-xyz");
+  });
+});

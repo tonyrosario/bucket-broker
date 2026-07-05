@@ -132,6 +132,15 @@ describe("GET /buckets/{id} — bad input", () => {
   });
 });
 
+describe("GET /buckets/{id} — DynamoDB failures", () => {
+  test("returns 500 when the DynamoDB read throws", async () => {
+    ddbMock.on(GetItemCommand).rejects(new Error("ProvisionedThroughputExceededException"));
+    const res = await handler(makeEvent(FIXED_REQUEST_ID, { "x-correlation-id": "corr-500" }));
+    expect(res.statusCode).toBe(500);
+    expect(res.headers?.["x-correlation-id"]).toBe("corr-500");
+  });
+});
+
 describe("GET /buckets/{id} — environment variable errors", () => {
   test("returns 500 when REQUESTS_TABLE is missing", async () => {
     delete process.env["REQUESTS_TABLE"];

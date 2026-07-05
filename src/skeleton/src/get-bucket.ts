@@ -44,15 +44,24 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     return jsonResponse(500, { error: "Internal configuration error" }, correlationId);
   }
 
-  const result = await ddbClient.send(
-    new GetItemCommand({
-      TableName: requestsTable,
-      Key: { requestId: { S: requestId } },
-      // Only fetch the fields we return — least-privilege data access.
-      ProjectionExpression: "requestId, #s, createdAt, updatedAt, completedAt, failedAt",
-      ExpressionAttributeNames: { "#s": "status" },
-    }),
-  );
+  let result;
+  try {
+    result = await ddbClient.send(
+      new GetItemCommand({
+        TableName: requestsTable,
+        Key: { requestId: { S: requestId } },
+        // Only fetch the fields we return — least-privilege data access.
+        ProjectionExpression: "requestId, #s, createdAt, updatedAt, completedAt, failedAt",
+        ExpressionAttributeNames: { "#s": "status" },
+      }),
+    );
+  } catch (err) {
+    log("ERROR", "Failed to read request from DynamoDB", {
+      ...logCtx,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return jsonResponse(500, { error: "Failed to read request" }, correlationId);
+  }
 
   if (!result.Item) {
     log("WARN", "Request not found", logCtx);

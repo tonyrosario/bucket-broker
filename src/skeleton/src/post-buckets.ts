@@ -48,18 +48,30 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   // Write request record with status=PENDING.
   // ConditionExpression guards against duplicate requestIds (UUID collision is
   // astronomically unlikely but explicit idempotency is good practice).
-  await ddbClient.send(
-    new PutItemCommand({
-      TableName: requestsTable,
-      Item: {
-        requestId: { S: requestId },
-        status: { S: "PENDING" },
-        createdAt: { S: new Date().toISOString() },
-        correlationId: { S: correlationId },
-      },
-      ConditionExpression: "attribute_not_exists(requestId)",
-    }),
-  );
+  try {
+    await ddbClient.send(
+      new PutItemCommand({
+        TableName: requestsTable,
+        Item: {
+          requestId: { S: requestId },
+          status: { S: "PENDING" },
+          createdAt: { S: new Date().toISOString() },
+          correlationId: { S: correlationId },
+        },
+        ConditionExpression: "attribute_not_exists(requestId)",
+      }),
+    );
+  } catch (err) {
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      log("WARN", "Duplicate requestId — record already exists", logCtx);
+      return errorResponse(409, "Request already exists", correlationId);
+    }
+    log("ERROR", "Failed to write request to DynamoDB", {
+      ...logCtx,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return errorResponse(500, "Failed to record request", correlationId);
+  }
 
   log("INFO", "Request written to DynamoDB with status=PENDING", logCtx);
 
@@ -68,13 +80,23 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   // ExecutionAlreadyExists from SF (handled by the caller's retry logic).
   const sfnInput: ExecutionInput = { requestId, correlationId };
 
-  await sfnClient.send(
-    new StartExecutionCommand({
-      stateMachineArn,
-      name: requestId,
-      input: JSON.stringify(sfnInput),
-    }),
-  );
+  try {
+    await sfnClient.send(
+      new StartExecutionCommand({
+        stateMachineArn,
+        name: requestId,
+        input: JSON.stringify(sfnInput),
+      }),
+    );
+  } catch (err) {
+    // The PENDING record persists with no execution. A sweeper (deferred to
+    // #25) reconciles orphaned PENDING records; here we surface the failure.
+    log("ERROR", "Failed to start Step Functions execution", {
+      ...logCtx,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return errorResponse(500, "Failed to start provisioning", correlationId);
+  }
 
   log("INFO", "Step Functions execution started", logCtx);
 
