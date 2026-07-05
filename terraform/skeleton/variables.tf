@@ -36,3 +36,13 @@ variable "lambda_timeout_seconds" {
     error_message = "lambda_timeout_seconds must be between 1 and 900."
   }
 }
+
+variable "codebuild_source_version" {
+  description = "Immutable git commit SHA the CodeBuild terraform-runner checks out. Must be a full 40-char SHA (never a branch or tag): terraform plan evaluates data sources at plan time, so an unpinned ref would execute whatever was last pushed with the runner's role. (#16 review)"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.codebuild_source_version))
+    error_message = "codebuild_source_version must be a full 40-character git commit SHA (not a branch or tag)."
+  }
+}

@@ -390,6 +390,13 @@ resource "aws_iam_role_policy" "codebuild" {
         ]
       },
       {
+        # Scoped to per-request stripped-bucket keys via a distinguishing
+        # Purpose tag that the platform keys (data/logs/tfstate) never carry.
+        # The universal `Module = skeleton` tag (provider default_tags) is NOT
+        # usable here — it also matches the platform keys. kms:PutKeyPolicy and
+        # kms:ScheduleKeyDeletion are intentionally NOT granted: CreateKey sets
+        # the policy at creation, and the runner must never rewrite or delete a
+        # platform key. (#16 review P0)
         Sid    = "UseStrippedBucketKMSKey"
         Effect = "Allow"
         Action = [
@@ -398,16 +405,14 @@ resource "aws_iam_role_policy" "codebuild" {
           "kms:ReEncrypt*",
           "kms:GenerateDataKey",
           "kms:DescribeKey",
-          "kms:PutKeyPolicy",
           "kms:EnableKeyRotation",
           "kms:GetKeyPolicy",
-          "kms:GetKeyRotationStatus",
-          "kms:ScheduleKeyDeletion"
+          "kms:GetKeyRotationStatus"
         ]
         Resource = "arn:aws:kms:${local.region}:${local.account_id}:key/*"
         Condition = {
           StringEquals = {
-            "aws:ResourceTag/Module" = "skeleton"
+            "aws:ResourceTag/Purpose" = "stripped-bucket"
           }
         }
       }

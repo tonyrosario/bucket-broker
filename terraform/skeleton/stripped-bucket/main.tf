@@ -90,6 +90,10 @@ resource "aws_kms_key" "bucket" {
 
   tags = {
     Name = "skeleton-bucket-${var.request_id}"
+    # Distinguishing tag the CodeBuild runner's KMS IAM condition scopes to, so
+    # the runner can act only on per-request bucket keys — never the platform
+    # data/logs/tfstate keys, which never carry this tag. (#16 review P0)
+    Purpose = "stripped-bucket"
   }
 }
 

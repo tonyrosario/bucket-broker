@@ -132,6 +132,16 @@ describe("GET /buckets/{id} — bad input", () => {
   });
 });
 
+describe("GET /buckets/{id} — correlation-id", () => {
+  test("generates a UUID correlation-id when no header is provided", async () => {
+    ddbMock.on(GetItemCommand).resolves({ Item: undefined });
+    const res = await handler(makeEvent("no-header-request"));
+    const cid = res.headers?.["x-correlation-id"];
+    expect(cid).not.toBe("unknown");
+    expect(cid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+});
+
 describe("GET /buckets/{id} — DynamoDB failures", () => {
   test("returns 500 when the DynamoDB read throws", async () => {
     ddbMock.on(GetItemCommand).rejects(new Error("ProvisionedThroughputExceededException"));

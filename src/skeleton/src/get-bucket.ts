@@ -9,6 +9,7 @@
 
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import { randomUUID } from "crypto";
 import type { RequestStatus } from "./constants.js";
 
 // Singleton client — instantiated once per Lambda container.
@@ -24,8 +25,10 @@ export interface BucketStatusResponse {
 }
 
 export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+  // Generate a unique id when the caller sends none, so concurrent header-less
+  // requests never collide on a shared value in logs (matches POST handler).
   const correlationId =
-    (event.headers?.["x-correlation-id"] ?? event.headers?.["X-Correlation-Id"]) ?? "unknown";
+    (event.headers?.["x-correlation-id"] ?? event.headers?.["X-Correlation-Id"]) ?? randomUUID();
 
   const requestId = event.pathParameters?.["id"];
 

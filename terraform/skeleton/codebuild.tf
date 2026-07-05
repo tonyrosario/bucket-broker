@@ -8,9 +8,11 @@
 #   4. terraform validate
 #   5. terraform plan -var="request_id=$REQUEST_ID"
 #
-# Source: GitHub (repo root).  In a live deploy, CODEBUILD_SOURCE_VERSION
-# should be set to the current main ref so CodeBuild always runs from known
-# good code.
+# Source: GitHub (repo root), pinned to an immutable commit SHA via
+# var.codebuild_source_version (never a branch) so CodeBuild always runs from
+# known-good code. terraform plan evaluates data sources at plan time, so an
+# unpinned ref would execute whatever was last pushed with the runner's role.
+# (#16 review)
 # ---------------------------------------------------------------------------
 
 resource "aws_codebuild_project" "terraform_runner" {
@@ -59,6 +61,10 @@ resource "aws_codebuild_project" "terraform_runner" {
         type: NO_CACHE
     BUILDSPEC
   }
+
+  # Pin the checked-out ref to an immutable commit SHA (never a branch) so the
+  # runner always executes known-good code. (#16 review)
+  source_version = var.codebuild_source_version
 
   artifacts {
     type = "NO_ARTIFACTS"
