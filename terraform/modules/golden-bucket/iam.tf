@@ -46,11 +46,12 @@ data "aws_iam_policy_document" "team_crud" {
   statement {
     sid    = "S3ObjectCRUD"
     effect = "Allow"
+    # Note: s3:GetObjectAcl / s3:PutObjectAcl are intentionally omitted.
+    # BucketOwnerEnforced (object ownership) disables ACLs on this bucket;
+    # granting ACL actions would be dead permissions.
     actions = [
       "s3:GetObject",
-      "s3:GetObjectAcl",
       "s3:GetObjectVersion",
-      "s3:GetObjectVersionAcl",
       "s3:GetObjectTagging",
       "s3:GetObjectVersionTagging",
       "s3:ListMultipartUploadParts",

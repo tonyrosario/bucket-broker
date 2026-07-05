@@ -167,11 +167,11 @@ resource "aws_s3_bucket_policy" "bucket" {
         Principal = {
           AWS = aws_iam_role.team.arn
         }
+        # Note: s3:GetObjectAcl / s3:PutObjectAcl omitted — BucketOwnerEnforced
+        # disables ACLs; granting them would be dead permissions.
         Action = [
           "s3:GetObject",
-          "s3:GetObjectAcl",
           "s3:GetObjectVersion",
-          "s3:GetObjectVersionAcl",
           "s3:GetObjectTagging",
           "s3:GetObjectVersionTagging",
           "s3:GetBucketLocation",
