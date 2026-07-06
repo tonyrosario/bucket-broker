@@ -6,6 +6,11 @@ name: CI
 # start enforcing automatically as those files land.
 
 on:
+  # SECURITY: keep this as `pull_request` — never `pull_request_target`. The
+  # node and policy jobs execute PR-authored code (npm test/lint, opa test) on
+  # the runner. Under `pull_request` that runs with a read-only GITHUB_TOKEN and
+  # no secrets; under `pull_request_target` the same steps would run in the base
+  # repo's privileged context (write scope + secrets) — a classic pwn-request.
   pull_request:
   push:
     branches: [main]
@@ -115,6 +120,8 @@ jobs:
   policy:
     name: OPA policy tests
     runs-on: ubuntu-latest
+    # Bound compute: this job runs `opa test` over PR-authored Rego dirs.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Any Rego present?
@@ -155,6 +162,9 @@ jobs:
   node:
     name: Node lint + typecheck + test
     runs-on: ubuntu-latest
+    # Bound compute: this job installs and runs PR-authored test/lint scripts
+    # for every discovered package.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Discover Node packages
@@ -190,11 +200,14 @@ jobs:
             echo "::group::node ${dir}"
             (
               cd "${dir}"
-              if [ -f package-lock.json ]; then
-                npm ci --ignore-scripts
-              else
-                npm install --ignore-scripts --no-save
+              # Require a committed lockfile so the whole dependency tree is
+              # integrity-pinned via `npm ci`; fail rather than fall back to an
+              # unpinned `npm install` that resolves semver ranges fresh.
+              if [ ! -f package-lock.json ]; then
+                echo "::error::${dir} has no package-lock.json — commit one so npm ci can integrity-pin dependencies."
+                exit 1
               fi
+              npm ci --ignore-scripts
               npm run lint --if-present
               npm run typecheck --if-present
               npm test --if-present
