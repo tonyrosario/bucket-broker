@@ -50,13 +50,18 @@ variable "oidc_jwks_uri" {
   }
 }
 
-variable "oidc_provider_arn" {
-  description = "ARN of the AWS IAM OIDC identity provider corresponding to the IdP issuer. Create this once per AWS account (it is account-scoped, not env-scoped) and pass the ARN in. Used as the Federated principal in team-role trust policies."
-  type        = string
+variable "broker_principal_arns" {
+  description = "IAM principal ARNs (the platform backend: request-handler / provisioner execution roles) permitted to assume the team roles, after an entitlements check. Team→group authorization is enforced upstream (authorizer + entitlements table + bucket policy), not in the trust condition — see ADR-0006. No OIDC federation."
+  type        = list(string)
 
   validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:oidc-provider/.+", var.oidc_provider_arn))
-    error_message = "oidc_provider_arn must be a valid IAM OIDC provider ARN."
+    condition     = length(var.broker_principal_arns) > 0
+    error_message = "broker_principal_arns must contain at least one backend principal ARN."
+  }
+
+  validation {
+    condition     = alltrue([for arn in var.broker_principal_arns : can(regex("^arn:aws(-[a-z]+)*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$", arn))])
+    error_message = "Each broker_principal_arns entry must be a valid IAM role ARN (no users, no wildcards)."
   }
 }
 
@@ -88,9 +93,10 @@ variable "entitlements_table_name" {
 # IAM role (e.g. "platform-eng"). Adding/removing entries here provisions or
 # destroys the corresponding IAM role — no code changes needed.
 #
-# Swapping IdPs: update oidc_provider_arn, oidc_issuer, oidc_audience, and
-# the group name values in this map. The IAM role names (and bucket policies
-# referencing them) are stable across IdP swaps.
+# Swapping IdPs: update oidc_issuer, oidc_audience, oidc_jwks_uri, and the
+# group name values in this map. The IAM role names (and bucket policies
+# referencing them) are stable across IdP swaps. Team roles are brokered by the
+# backend (var.broker_principal_arns), not federated to the IdP — see ADR-0006.
 # ---------------------------------------------------------------------------
 
 variable "team_groups" {

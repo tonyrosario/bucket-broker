@@ -9,10 +9,9 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "oidc_provider_arn" {
-  description = "ARN of the pre-existing AWS IAM OIDC identity provider for the IdP. Create this once per AWS account before calling this module."
-  type        = string
-  # EXAMPLE default — replace with your real OIDC provider ARN.
-  # Format: arn:aws:iam::<account-id>:oidc-provider/<issuer-host>
-  default = "arn:aws:iam::123456789012:oidc-provider/dev-12345.example-idp.com"
+variable "broker_principal_arns" {
+  description = "Backend principal ARNs (request-handler / provisioner execution roles) allowed to assume team roles after the entitlements check. See ADR-0006."
+  type        = list(string)
+  # EXAMPLE default — replace with your real backend role ARNs.
+  default = ["arn:aws:iam::123456789012:role/bucket-broker-request-handler"]
 }

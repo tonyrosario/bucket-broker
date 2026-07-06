@@ -18,11 +18,6 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.name
 
-  # OIDC issuer without the https:// prefix — used in IAM condition keys.
-  # AWS IAM OIDC condition key format: <issuer-host-and-path>:<claim>
-  # e.g. "dev-12345.okta.com:groups" not "https://dev-12345.okta.com:groups"
-  oidc_issuer_host = trimprefix(var.oidc_issuer, "https://")
-
   # SSM path prefix — default to /{name_prefix}/oidc unless overridden.
   ssm_prefix = var.ssm_path_prefix != "" ? var.ssm_path_prefix : "/${var.name_prefix}/oidc"
 

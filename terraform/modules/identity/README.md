@@ -9,7 +9,7 @@ IdP-flexible identity substrate for the bucket-broker platform.
 | `aws_kms_key` (CMK) | Encrypts the entitlements table and OIDC JWKS URI SSM param |
 | `aws_ssm_parameter` × 3 | OIDC issuer (String), audience (String), JWKS URI (SecureString) |
 | `aws_dynamodb_table` (entitlements) | Maps IdP group → `{can_create, teams[], access{read,write,delete}}` |
-| `aws_iam_role` × N | One role per `team_groups` entry; OIDC trust conditioned on group claim |
+| `aws_iam_role` × N | One role per `team_groups` entry; platform-brokered trust — backend assumes after entitlements check (ADR-0006) |
 
 ## Swapping the IdP (zero code changes)
 
@@ -19,16 +19,13 @@ reads config from SSM at runtime.
 
 To migrate from one OIDC-compliant IdP to another:
 
-1. Update the OIDC provider registration in your AWS account
-   (`aws_iam_openid_connect_provider` — account-scoped, created separately).
-2. Update your module call:
+1. Update your module call:
    - `oidc_issuer` → new issuer URL
    - `oidc_audience` → new audience / client ID
    - `oidc_jwks_uri` → new JWKS URI
-   - `oidc_provider_arn` → new OIDC provider ARN
    - `team_groups` → update group name values to match the new IdP's claim names
-3. `terraform apply` — SSM parameters and IAM role trust conditions are updated.
-4. Update the entitlements table `group` keys to match the new IdP's group claim names
+2. `terraform apply` — the SSM parameters are updated.
+3. Update the entitlements table `group` keys to match the new IdP's group claim names
    (DynamoDB `UpdateItem` / migration script — no Terraform changes needed for data).
 
 No Lambda code, no application logic, and no IAM policy documents outside this module
@@ -65,46 +62,37 @@ Example item (DynamoDB JSON):
 
 See `examples/complete/main.tf` for an `aws_dynamodb_table_item` fixture using this schema.
 
-## IAM trust policy — group → role mapping
+## IAM trust policy — platform-brokered (ADR-0006)
 
-Each entry in `var.team_groups` produces an IAM role with this trust policy shape:
+Each entry in `var.team_groups` produces an IAM role whose trust policy allows
+**only the platform backend** to assume it:
 
 ```json
 {
   "Effect": "Allow",
-  "Principal": { "Federated": "<oidc_provider_arn>" },
-  "Action": "sts:AssumeRoleWithWebIdentity",
-  "Condition": {
-    "StringEquals":            { "<issuer-host>:aud": "<oidc_audience>" },
-    "ForAnyValue:StringEquals": { "<issuer-host>:groups": "<idp_group_name>" }
-  }
+  "Principal": { "AWS": ["<broker_principal_arns>"] },
+  "Action": "sts:AssumeRole"
 }
 ```
 
-- `StringEquals` on `aud` prevents cross-application token reuse.
-- `ForAnyValue:StringEquals` on `groups` handles array-valued OIDC claims correctly
-  (matches when any element in the claim array equals the configured group name).
-- The `Federated` principal is the specific OIDC provider ARN — never a wildcard.
+Team→group authorization is **not** enforced in this trust condition. AWS STS does
+not surface arbitrary/array OIDC claims such as `groups` as IAM trust condition keys
+for generic OIDC federation, so a `groups`-gated `AssumeRoleWithWebIdentity` trust
+would be either inert or — with a single shared audience — assumable by any
+authenticated user. Instead, the backend (request-handler / provisioner) checks the
+caller's entitlements (group→team) against the entitlements table and then assumes the
+correct team role on their behalf. The authorization gate is the authorizer +
+entitlements table + bucket policy — the design's source of truth. See ADR-0006.
 
 The IAM role carries **no inline permissions**. Downstream modules (golden-bucket,
 platform-api) attach scoped bucket and SSM permissions to these role ARNs.
 
-## OIDC provider
+## No IAM OIDC provider required
 
-The AWS IAM OIDC provider (`aws_iam_openid_connect_provider`) is **account-scoped**
-(only one provider per issuer URL per account). Create it separately — for example in
-an account-bootstrap module — and pass the ARN as `var.oidc_provider_arn`. This avoids
-conflicts when multiple environments share an AWS account.
-
-Example (run once per account):
-
-```hcl
-resource "aws_iam_openid_connect_provider" "idp" {
-  url             = "https://dev-12345.example-idp.com"
-  client_id_list  = ["api://bucket-broker"]
-  thumbprint_list = ["<real-thumbprint-from-idp-certificate>"]
-}
-```
+Because team roles are brokered by the backend (not assumed via
+`AssumeRoleWithWebIdentity`), this platform does **not** need an
+`aws_iam_openid_connect_provider`. User tokens are validated by the JWT authorizer
+against the IdP's JWKS endpoint (ADR-0004); STS federation is not used.
 
 ## Required inputs
 
@@ -114,7 +102,7 @@ resource "aws_iam_openid_connect_provider" "idp" {
 | `oidc_issuer` | string | OIDC issuer URL (`https://...`) |
 | `oidc_audience` | string | OIDC audience / client ID |
 | `oidc_jwks_uri` | string (sensitive) | JWKS URI (`https://...`) |
-| `oidc_provider_arn` | string | IAM OIDC provider ARN |
+| `broker_principal_arns` | list(string) | Backend role ARNs allowed to assume team roles after the entitlements check (ADR-0006) |
 
 ## Optional inputs
 

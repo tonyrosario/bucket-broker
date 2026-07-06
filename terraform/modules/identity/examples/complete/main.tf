@@ -5,8 +5,10 @@
 #   • Calling the identity module with config-driven OIDC inputs.
 #   • A sample entitlements fixture item for the "platform-eng" demo team.
 #   • Swapping the IdP: change the module inputs (oidc_issuer, oidc_audience,
-#     oidc_jwks_uri, oidc_provider_arn) and update group values in team_groups.
+#     oidc_jwks_uri) and update group values in team_groups.
 #     No Terraform code changes required — only variable/data changes.
+#   • Team roles are brokered by the backend (broker_principal_arns), not
+#     federated to the IdP — see ADR-0006.
 #
 # NOT for production: the OIDC values below are illustrative placeholders.
 # Replace all values marked "EXAMPLE" before applying to a real environment.
@@ -17,12 +19,16 @@ module "identity" {
 
   name_prefix = "bucket-broker"
 
-  # IdP config — swap the IdP by changing these four values + team_groups.
+  # IdP config — swap the IdP by changing these three values + team_groups.
   # Values are written to SSM; the JWT authorizer reads them at runtime.
-  oidc_issuer       = "https://dev-12345.example-idp.com"         # EXAMPLE — replace with real issuer URL
-  oidc_audience     = "api://bucket-broker"                       # EXAMPLE — replace with real audience
-  oidc_jwks_uri     = "https://dev-12345.example-idp.com/v1/keys" # EXAMPLE — replace with real JWKS URI
-  oidc_provider_arn = var.oidc_provider_arn
+  oidc_issuer   = "https://dev-12345.example-idp.com"         # EXAMPLE — replace with real issuer URL
+  oidc_audience = "api://bucket-broker"                       # EXAMPLE — replace with real audience
+  oidc_jwks_uri = "https://dev-12345.example-idp.com/v1/keys" # EXAMPLE — replace with real JWKS URI
+
+  # Backend principals allowed to assume team roles after the entitlements
+  # check (ADR-0006). In production these are the request-handler / provisioner
+  # execution role ARNs.
+  broker_principal_arns = var.broker_principal_arns
 
   # One team for demo purposes. Add more entries as teams onboard.
   # key   = short team identifier (used in IAM role name and output map keys)

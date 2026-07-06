@@ -1,57 +1,50 @@
 # ---------------------------------------------------------------------------
-# IAM — Team roles with OIDC-conditioned trust policies.
+# IAM — Team roles with platform-brokered trust (ADR-0006).
 #
 # One IAM role per entry in var.team_groups. Each role:
-#   • Can be assumed via sts:AssumeRoleWithWebIdentity by a holder of a valid
-#     JWT whose 'groups' claim contains the configured IdP group name.
+#   • Is assumed by the platform BACKEND (request-handler / provisioner) via
+#     var.broker_principal_arns, AFTER the backend has checked the caller's
+#     entitlements (group→team) against the entitlements table. Users never
+#     assume these roles directly.
 #   • Carries no inline permissions here — bucket policies (golden-bucket
 #     module) and other downstream modules attach scoped permissions to these
 #     role ARNs.
 #
-# Trust policy conditions (least-privilege):
-#   aud  — must match var.oidc_audience (prevents cross-tenant token reuse).
-#   groups — ForAnyValue:StringEquals on the JWT groups claim; matches only
-#            tokens where the user is a member of the configured group.
+# Why not user-assumed OIDC (sts:AssumeRoleWithWebIdentity gated on a `groups`
+# claim)? AWS STS does not surface arbitrary/array custom claims such as
+# `groups` as IAM trust condition keys for generic OIDC federation, so that
+# trust is either inert or — with a single shared audience — assumable by any
+# authenticated user. Team→group authorization therefore lives in the
+# authorizer + entitlements table + bucket policy (the design's source of
+# truth), and the backend brokers the role assumption. See ADR-0006.
 #
-# IdP swap: update var.oidc_provider_arn, var.oidc_issuer (changes the
-# condition key prefix), and the group name values in var.team_groups. The
-# IAM role names (and any bucket policies that reference them) are stable
-# across IdP migrations because they derive from team names, not group names.
+# IdP swap: update the OIDC config in SSM (var.oidc_issuer / _audience /
+# _jwks_uri) and the group values in var.team_groups. Role names derive from
+# team names, so they — and any bucket policies referencing them — are stable
+# across IdP migrations.
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "team" {
   for_each = var.team_groups
 
   name                 = "${var.name_prefix}-team-${each.key}"
-  description          = "Identity role for the '${each.key}' team (IdP group: ${each.value}). Assumed via OIDC WebIdentity by team members; bucket policies reference this ARN for scoped access."
+  description          = "Identity role for the '${each.key}' team (IdP group: ${each.value}). Assumed by the platform backend after an entitlements check; bucket policies reference this ARN for scoped access."
   max_session_duration = 3600
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "OIDCGroupTrust"
+        Sid    = "PlatformBrokeredTrust"
         Effect = "Allow"
         Principal = {
-          # Federated principal — only the registered OIDC provider can issue
-          # the WebIdentity assertion; no wildcard principal.
-          Federated = var.oidc_provider_arn
+          # Only the platform backend principals (request-handler / provisioner
+          # execution roles) may assume team roles — no federation, no wildcard.
+          # WHICH team role is assumed is decided by the backend after the
+          # entitlements (group→team) check; that is the authorization gate.
+          AWS = var.broker_principal_arns
         }
-        Action = "sts:AssumeRoleWithWebIdentity"
-        Condition = {
-          # aud must match the platform's registered audience — prevents
-          # tokens issued for other applications from being used here.
-          StringEquals = {
-            "${local.oidc_issuer_host}:aud" = var.oidc_audience
-          }
-          # groups claim must contain exactly this team's IdP group.
-          # ForAnyValue:StringEquals is the correct operator for array-valued
-          # OIDC claims: it asserts that at least one element in the claim
-          # array equals the specified value (no wildcards).
-          "ForAnyValue:StringEquals" = {
-            "${local.oidc_issuer_host}:groups" = each.value
-          }
-        }
+        Action = "sts:AssumeRole"
       }
     ]
   })
