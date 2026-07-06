@@ -28,6 +28,10 @@ resource "aws_iam_role" "team" {
   description        = "Team '${var.team}' scoped CRUD access to S3 bucket '${var.bucket_name}'"
   assume_role_policy = data.aws_iam_policy_document.team_trust.json
 
+  # Platform-provisioned team roles carry a permissions boundary that caps them
+  # to the golden-bucket CRUD surface (#18 P0-2). Null when unset (standalone use).
+  permissions_boundary = var.team_role_permissions_boundary_arn != "" ? var.team_role_permissions_boundary_arn : null
+
   # Prevent accidental deletion while the bucket exists.
   force_detach_policies = false
 

@@ -22,13 +22,25 @@ export interface GoldenBucketTfvars {
   cost_center: string;
   path: "golden" | "escape";
   trusted_principals: string[];
+  /**
+   * Permissions boundary the runner root attaches to the team role. The
+   * provisioning role's iam:CreateRole grant requires this exact boundary
+   * (iam.tf), so the team role can never exceed the golden-bucket CRUD surface.
+   */
+  team_role_permissions_boundary_arn: string;
 }
 
 /**
  * Build the tfvars object for a validated request. `brokerPrincipalArns` are the
- * concrete platform broker principals the team role will trust (ADR-0006).
+ * concrete platform broker principals the team role will trust (ADR-0006);
+ * `teamRolePermissionsBoundaryArn` is the mandatory team-role permissions
+ * boundary (see {@link GoldenBucketTfvars}).
  */
-export function buildTfvars(req: ValidatedRequest, brokerPrincipalArns: string[]): GoldenBucketTfvars {
+export function buildTfvars(
+  req: ValidatedRequest,
+  brokerPrincipalArns: string[],
+  teamRolePermissionsBoundaryArn: string,
+): GoldenBucketTfvars {
   return {
     bucket_name: req.bucketName,
     team: req.team,
@@ -36,6 +48,7 @@ export function buildTfvars(req: ValidatedRequest, brokerPrincipalArns: string[]
     cost_center: req.costCenter,
     path: req.path,
     trusted_principals: brokerPrincipalArns,
+    team_role_permissions_boundary_arn: teamRolePermissionsBoundaryArn,
   };
 }
 
@@ -43,8 +56,12 @@ export function buildTfvars(req: ValidatedRequest, brokerPrincipalArns: string[]
  * Render the tfvars as a JSON string suitable for `terraform.auto.tfvars.json`.
  * This is the single choke point that guarantees no HCL injection.
  */
-export function renderTfvarsJson(req: ValidatedRequest, brokerPrincipalArns: string[]): string {
-  return JSON.stringify(buildTfvars(req, brokerPrincipalArns));
+export function renderTfvarsJson(
+  req: ValidatedRequest,
+  brokerPrincipalArns: string[],
+  teamRolePermissionsBoundaryArn: string,
+): string {
+  return JSON.stringify(buildTfvars(req, brokerPrincipalArns, teamRolePermissionsBoundaryArn));
 }
 
 /** Per-request backend state key: isolates locks and matches the ABAC scope. */

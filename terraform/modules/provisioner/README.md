@@ -42,12 +42,36 @@ and the runner cannot create a bucket without a validated, tagged session.
 | Per-request bucket creation scoped to the **exact** bucket name/ARN | `ProvisionBuckets` uses `arn:aws:s3:::${aws:PrincipalTag/BucketName}` (+ `-access-logs`) — the BucketName session tag resolves to one exact bucket, not a `name-*` prefix. The `provisioned_bucket_prefix` bound lives only in the trust policy to stop targeting pre-existing victim buckets. |
 | KMS alias ops bound to the just-created key, not `key/*` | `ProvisionKeyAliasOnKey` conditions on `aws:ResourceTag/Name = golden-bucket-${BucketName}` (golden-bucket tags its key with that per-request Name), and the alias ARN itself is the exact `alias/golden-bucket-${BucketName}`. |
 | KMS use-grants keyed by a per-request tag, never the universal `Module` tag; no `PutKeyPolicy`/`ScheduleKeyDeletion` | `UseProvisionKey` conditions on `aws:ResourceTag/Name` (unique per bucket). `kms:PutKeyPolicy` and `kms:ScheduleKeyDeletion` are never granted. |
-| State CMK grant adds `kms:ViaService` (s3+dynamodb) **and** `aws:SourceAccount` | `StateKMSViaService` — a leaked runner credential cannot Decrypt an exfiltrated state blob via the KMS API directly (#9 iac-1). |
+| **Platform keys off-limits regardless of tags (#18 P0-1)** | Two explicit **Deny** statements: `DenyPlatformDataLogsKeys` (all `kms:*` on the `data`+`logs` keys, unconditional) and `DenyDirectStateKeyKMS` (all `kms:*` on the state CMK when `kms:ViaService` is absent). An explicit Deny beats the tag-based `TagProvisionKeyAtCreate`/`UseProvisionKey` Allow, so a session can neither tag-then-decrypt the data/logs keys nor gain direct `kms:Decrypt` on the state CMK. The per-request golden-bucket key (a different ARN) is unaffected. |
+| State CMK grant adds `kms:ViaService` (s3+dynamodb) **and** `aws:SourceAccount` | `StateKMSViaService` — a leaked runner credential cannot Decrypt an exfiltrated state blob via the KMS API directly (#9 iac-1); `DenyDirectStateKeyKMS` (above) hardens this against the tag path. |
+| **No `CreateRole` → account-admin privesc (#18 P0-2)** | `iam:CreateRole` is gated on `Condition StringEquals iam:PermissionsBoundary = <team-role boundary>` (`CreateTeamRoleWithBoundary`); the module creates that boundary (`aws_iam_policy.team_role_boundary`, wired to golden-bucket's team role), capping any created role to S3 data-plane on the platform namespace + KMS-via-S3. `iam:CreatePolicyVersion` is removed (the per-request crud policy is created fresh, never versioned), and the runner holds no `iam:PutRolePermissionsBoundary`, so neither the attached policy's content nor the boundary can be swapped. |
+| Trust tags `Team`/`RequestId` constrained (#18 #4) | The provisioning-role trust policy no longer leaves `Team`/`RequestId` as bare `*`: `Team` must be non-empty and free of `/ : , space` (`StringNotLike`); `RequestId` is pinned to the 8-4-4-4-12 UUID layout the request-handler emits. |
 | Pin `terraform_state_principals` to the deploying account (reject cross-account) | The module never populates `state-backend`'s grant (stays dormant). `broker_principal_arns` is format-validated and an apply-time `precondition` in `iam.tf` rejects any ARN outside the deploying account (#9 iac-3 / ADR-0001). |
 | S3 object-access auditing for the state bucket | `cloudtrail.tf` — an interim CloudTrail records S3 data events for the state bucket to a hardened, KMS-encrypted audit bucket until observability (#23) wires access logging. Gate with `enable_state_bucket_audit_trail`. |
 | CodeBuild source pinned to an immutable commit SHA | `codebuild_source_version` is validated as a 40-char SHA; `source_version` uses it. `terraform plan` runs data sources with the assumed role, so the ref must be immutable (#16 delivery-vector). |
 | tfvars rendered without concatenating user input into HCL | The glue (`src/provisioner-glue`) serializes every value with `JSON.stringify` to `terraform.auto.tfvars.json` (Terraform's native JSON loader) after strict input validation — no HCL lexing of untrusted text. |
 | Team role trusts concrete broker principals, no OIDC (ADR-0006) | `broker_principal_arns` is rendered by the glue into golden-bucket's `trusted_principals`. |
+
+## Known limitations
+
+- **Intra-namespace tenant isolation on destructive S3 (#18 P1).** `ProvisionBuckets`
+  grants `s3:DeleteBucket`/`PutBucketPolicy`/`DeleteBucketPolicy` on
+  `${aws:PrincipalTag/BucketName}` (+`-access-logs`). The `BucketName` tag resolves
+  to one *exact* bucket, but nothing ties that bucket to the **requesting tenant**:
+  a request whose validated `BucketName` names *another* team's existing
+  `bucketbroker-*` bucket could delete it or rewrite its policy. Ownership currently
+  rests on the request-handler (#19) issuing only tenant-owned names; the ABAC layer
+  enforces the namespace bound, not per-tenant ownership. A durable fix (resource-tag
+  ownership condition, or embedding the tenant/RequestId in the bucket name and
+  scoping destructive actions to it) is tracked as a follow-up — see the linked issue
+  on PR #40. This does **not** widen the P0 blast radius (it stays inside the platform
+  namespace) but is a real intra-namespace integrity gap.
+- **Interim audit-bucket immutability (ties into #20).** The audit bucket is versioned,
+  has log-file validation, and now a bucket-policy **Deny** on `s3:DeleteObject`/
+  `DeleteObjectVersion` (`DenyAuditHistoryTamper`) so history cannot be manually purged
+  (Lifecycle expiration, being service-driven, still prunes noncurrent versions).
+  Full immutability — S3 **Object Lock (COMPLIANCE)** — is deferred to the pending #20
+  Object Lock decision and the #23 observability wiring.
 
 ## SLO / DLQ / status / concurrency
 

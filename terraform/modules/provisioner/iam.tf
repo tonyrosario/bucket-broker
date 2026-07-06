@@ -217,6 +217,18 @@ resource "aws_iam_role" "provisioning" {
   # Trust: only the runner role may assume, and only while passing session tags
   # whose BucketName matches the platform prefix — bounding the ABAC namespace so
   # the runner can never target a pre-existing bucket outside `<prefix>*`.
+  #
+  # Team and RequestId are ALSO constrained (previously "*"): they build IAM
+  # role/policy ARNs and the state-object prefix, so an unconstrained value both
+  # amplified the CreateRole path and let a request scope another request's state
+  # prefix. IAM's StringLike/StringNotLike wildcards are only `*`/`?` (a literal
+  # `*` in a value can't be pattern-matched, but note a substituted policy
+  # variable is inserted LITERALLY and is never re-interpreted as a wildcard):
+  #   - Team:      must be non-empty and free of `/ : , space` (which would
+  #                distort the derived role/policy ARNs).
+  #   - RequestId: pinned to the 8-4-4-4-12 UUID layout the request-handler emits
+  #                (each `?` = exactly one char), forbidding path/colon injection
+  #                by construction of length + dash positions.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -226,8 +238,11 @@ resource "aws_iam_role" "provisioning" {
       Condition = {
         StringLike = {
           "aws:RequestTag/BucketName" = "${var.provisioned_bucket_prefix}*"
-          "aws:RequestTag/Team"       = "*"
-          "aws:RequestTag/RequestId"  = "*"
+          "aws:RequestTag/Team"       = "?*"
+          "aws:RequestTag/RequestId"  = "????????-????-????-????-????????????"
+        }
+        StringNotLike = {
+          "aws:RequestTag/Team" = ["*/*", "*:*", "*,*", "* *"]
         }
       }
     }]
@@ -260,6 +275,42 @@ resource "aws_iam_role_policy" "provisioning" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      # --------------------------------------------------------------------
+      # EXPLICIT DENY — platform keys are OFF LIMITS (#18 P0-1).
+      #
+      # The golden-bucket key grants below (TagProvisionKeyAtCreate /
+      # UseProvisionKey) are scoped to key/* gated on a self-writable Name tag.
+      # Because the module data/logs key policies delegate to IAM via
+      # `root: kms:*`, a session could otherwise tag one of THOSE keys with the
+      # magic Name and then decrypt it — reaching the data/logs keys and (with no
+      # ViaService on UseProvisionKey) gaining DIRECT kms:Decrypt on the state
+      # CMK, nullifying StateKMSViaService. An explicit Deny overrides any Allow
+      # regardless of tags, so these two statements provably close that path
+      # while leaving the per-request golden-bucket key (a different ARN) usable.
+      # --------------------------------------------------------------------
+      {
+        # data + logs keys: no runner access under ANY condition. The runner
+        # never legitimately touches these (they encrypt the status table, DLQ,
+        # Lambda env, and log groups — all handled by the glue/sfn roles).
+        Sid      = "DenyPlatformDataLogsKeys"
+        Effect   = "Deny"
+        Action   = ["kms:*"]
+        Resource = [aws_kms_key.data.arn, aws_kms_key.logs.arn]
+      },
+      {
+        # state CMK: deny every DIRECT KMS API call (kms:ViaService absent). The
+        # only legitimate use is THROUGH s3/dynamodb, where AWS sets ViaService —
+        # that path stays allowed by StateKMSViaService below. This overrides the
+        # tag-based UseProvisionKey Allow (which carries no ViaService), so a
+        # tagged state key still cannot be decrypted out-of-band (#9 iac-1).
+        Sid      = "DenyDirectStateKeyKMS"
+        Effect   = "Deny"
+        Action   = ["kms:*"]
+        Resource = var.state_kms_key_arn
+        Condition = {
+          Null = { "kms:ViaService" = "true" }
+        }
+      },
       # --------------------------------------------------------------------
       # State backend — scoped to THIS request's state key prefix only.
       # --------------------------------------------------------------------
@@ -382,20 +433,44 @@ resource "aws_iam_role_policy" "provisioning" {
       # golden-bucket team IAM role + policy — EXACT names via Team+BucketName.
       # --------------------------------------------------------------------
       {
-        Sid    = "ProvisionTeamRole"
+        # CreateRole is split out and REQUIRES the platform team-role permissions
+        # boundary (#18 P0-2): even if a compromised session attaches an
+        # over-broad policy (or picks an attacker trust doc), the boundary caps
+        # the resulting role to at most the golden-bucket CRUD surface — it can
+        # never become an account admin. The runner is NOT granted
+        # iam:PutRolePermissionsBoundary/DeleteRolePermissionsBoundary, so the
+        # boundary can't be stripped after creation.
+        Sid      = "CreateTeamRoleWithBoundary"
+        Effect   = "Allow"
+        Action   = ["iam:CreateRole"]
+        Resource = "arn:${local.partition}:iam::${local.account_id}:role/golden-bucket-$${aws:PrincipalTag/Team}-$${aws:PrincipalTag/BucketName}"
+        Condition = {
+          StringEquals = {
+            "iam:PermissionsBoundary" = aws_iam_policy.team_role_boundary.arn
+          }
+        }
+      },
+      {
+        # Non-create lifecycle actions on the exact team role. These calls do not
+        # carry iam:PermissionsBoundary, so they live in a separate statement.
+        Sid    = "ManageTeamRole"
         Effect = "Allow"
         Action = [
-          "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
+          "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
           "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole",
         ]
         Resource = "arn:${local.partition}:iam::${local.account_id}:role/golden-bucket-$${aws:PrincipalTag/Team}-$${aws:PrincipalTag/BucketName}"
       },
       {
+        # The per-request crud policy is created FRESH each request and never
+        # versioned, so iam:CreatePolicyVersion is intentionally omitted (#18
+        # P0-2): granting it would let a session swap an {Allow *:*} document into
+        # the pinned crud ARN, defeating AttachTeamPolicyOnly's ARN pin.
         Sid    = "ProvisionTeamPolicy"
         Effect = "Allow"
         Action = [
           "iam:CreatePolicy", "iam:DeletePolicy", "iam:GetPolicy", "iam:GetPolicyVersion",
-          "iam:ListPolicyVersions", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
+          "iam:ListPolicyVersions", "iam:DeletePolicyVersion",
           "iam:TagPolicy", "iam:UntagPolicy",
         ]
         Resource = "arn:${local.partition}:iam::${local.account_id}:policy/golden-bucket-crud-$${aws:PrincipalTag/Team}-$${aws:PrincipalTag/BucketName}"
@@ -416,4 +491,64 @@ resource "aws_iam_role_policy" "provisioning" {
       },
     ]
   })
+}
+
+# ===========================================================================
+# Team-role permissions boundary (#18 P0-2)
+#
+# This managed policy is the CEILING for EVERY IAM role the provisioning session
+# creates (enforced by the iam:PermissionsBoundary condition on CreateTeamRoleWithBoundary
+# above). A role's effective permissions are the INTERSECTION of its attached
+# policies and this boundary — so even if a compromised session attaches
+# AdministratorAccess, the team role can do no more than S3 data-plane on the
+# platform bucket namespace + KMS strictly via S3. It grants nothing on its own
+# (a boundary is a bound, not a grant); it exists only to cap.
+#
+# It is sized to permit EXACTLY what golden-bucket's team CRUD policy needs
+# (golden-bucket/iam.tf: S3 object+bucket actions on the bucket ARN, and
+# kms:GenerateDataKey/Decrypt/DescribeKey via s3), plus headroom, so legitimate
+# provisioning is unaffected.
+# ===========================================================================
+resource "aws_iam_policy" "team_role_boundary" {
+  name        = "${local.prefix}-team-role-boundary"
+  description = "Permissions boundary capping any golden-bucket team role the provisioning session creates to S3 data-plane on the platform namespace + KMS-via-S3. Prevents CreateRole -> admin privilege escalation (#18 P0-2)."
+
+  #checkov:skip=CKV_AWS_290:This is a permissions BOUNDARY (a ceiling that grants nothing on its own); the object-path and via-service KMS scopes are the intended maximum surface. Per-request bucket/key names are unknown at module-apply time.
+  #checkov:skip=CKV_AWS_355:KMS use is capped by kms:ViaService=s3 (region-pinned); individual per-request key ARNs cannot be named because they are created per request.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Cap: S3 data-plane, scoped to the platform bucket namespace only. Covers
+        # exactly the golden-bucket team_crud action set (data + access-logs
+        # buckets both fall under the prefix). No bucket-policy / delete-bucket /
+        # IAM / cross-service actions are permitted through the boundary.
+        Sid    = "CapS3DataPlaneWithinNamespace"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging", "s3:GetObjectVersionTagging",
+          "s3:ListMultipartUploadParts", "s3:PutObject", "s3:PutObjectTagging",
+          "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload",
+          "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation",
+        ]
+        Resource = [ #tfsec:ignore:aws-iam-no-policy-wildcards
+          "arn:${local.partition}:s3:::${var.provisioned_bucket_prefix}*",
+          "arn:${local.partition}:s3:::${var.provisioned_bucket_prefix}*/*",
+        ]
+      },
+      {
+        # Cap: KMS usable ONLY through S3 in this region. A boundaried team role
+        # can never call KMS directly, and never for a non-S3 service.
+        Sid      = "CapKMSViaS3Only"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey", "kms:Encrypt", "kms:ReEncrypt*"]
+        Resource = "*" #tfsec:ignore:aws-iam-no-policy-wildcards
+        Condition = {
+          StringEquals = { "kms:ViaService" = "s3.${local.region}.amazonaws.com" }
+        }
+      },
+    ]
+  })
+
+  tags = local.tags
 }

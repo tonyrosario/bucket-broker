@@ -22,10 +22,12 @@ export class ValidationError extends Error {
   }
 }
 
-// Mirrors the golden-bucket module's bucket_name validation exactly (3-63 chars,
-// lowercase alnum + dots + hyphens, must start/end alnum). No underscores, no
-// uppercase, no metacharacters.
-const BUCKET_NAME_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+// Bucket name allowlist (3-63 chars, lowercase alnum + dots + hyphens, must
+// start/end alnum). No underscores, uppercase, or metacharacters. STRICTER than
+// the golden-bucket module's regex: the leading negative lookahead also rejects
+// consecutive dots (`a..b`), which S3 itself forbids — closing the gap the
+// review flagged (BUCKET_NAME_RE looser than real S3 rules).
+const BUCKET_NAME_RE = /^(?!.*\.\.)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 // Team is embedded in an IAM role name and passed as an STS session tag, so it
 // is restricted to a conservative, shell- and IAM-safe alphabet.
 const TEAM_RE = /^[a-zA-Z0-9_-]{1,64}$/;

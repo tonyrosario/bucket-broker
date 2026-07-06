@@ -122,6 +122,56 @@ run "provisioning_role_is_abac_and_least_privilege" {
     condition     = !strcontains(aws_iam_role_policy.provisioning.policy, "kms:PutKeyPolicy") && !strcontains(aws_iam_role_policy.provisioning.policy, "kms:ScheduleKeyDeletion")
     error_message = "provisioning role must never hold kms:PutKeyPolicy or kms:ScheduleKeyDeletion"
   }
+
+  # #18 P0-2: the content-swap vector (CreatePolicyVersion into the pinned crud
+  # ARN) must be gone; the per-request crud policy is created fresh, never versioned.
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.provisioning.policy, "iam:CreatePolicyVersion")
+    error_message = "provisioning role must NOT hold iam:CreatePolicyVersion (policy-content swap privesc)"
+  }
+}
+
+# #18 P0-1 + P0-2 — the two privilege-escalation blockers from the review.
+run "provisioning_role_denies_platform_keys_and_bounds_createrole" {
+  command = apply
+
+  # P0-1: explicit Deny on the platform data/logs keys and on DIRECT use of the
+  # state CMK — overriding the tag-based golden-bucket key grants so a session
+  # can neither reach data/logs nor decrypt exfiltrated state out-of-band.
+  assert {
+    condition     = strcontains(aws_iam_role_policy.provisioning.policy, "DenyPlatformDataLogsKeys") && strcontains(aws_iam_role_policy.provisioning.policy, "DenyDirectStateKeyKMS")
+    error_message = "provisioning role must carry explicit Deny statements for the data/logs keys and direct state-CMK use (#18 P0-1)"
+  }
+
+  # The direct-state-key Deny must reference the state CMK ARN and gate on the
+  # absence of kms:ViaService (Null), leaving only the s3/dynamodb path.
+  assert {
+    condition     = strcontains(aws_iam_role_policy.provisioning.policy, "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000") && strcontains(aws_iam_role_policy.provisioning.policy, "kms:ViaService")
+    error_message = "the state-CMK Deny must target the state key ARN and preserve the kms:ViaService path"
+  }
+
+  # P0-2: iam:CreateRole is gated on the platform team-role permissions boundary,
+  # so a compromised session cannot mint an unbounded (admin) role.
+  assert {
+    condition     = strcontains(aws_iam_role_policy.provisioning.policy, "CreateTeamRoleWithBoundary") && strcontains(aws_iam_role_policy.provisioning.policy, "iam:PermissionsBoundary")
+    error_message = "iam:CreateRole must require the team-role permissions boundary (#18 P0-2)"
+  }
+
+  # The boundary managed policy itself must exist and cap to S3-namespace + KMS-via-S3.
+  assert {
+    condition     = aws_iam_policy.team_role_boundary.name == "bb-test-team-role-boundary"
+    error_message = "the team-role permissions boundary managed policy must be created by the module"
+  }
+  assert {
+    condition     = strcontains(aws_iam_policy.team_role_boundary.policy, "CapKMSViaS3Only") && strcontains(aws_iam_policy.team_role_boundary.policy, "arn:aws:s3:::bucketbroker*")
+    error_message = "the boundary must cap team roles to the platform S3 namespace and KMS-via-S3"
+  }
+
+  # #4: the trust policy must no longer leave Team/RequestId as bare "*".
+  assert {
+    condition     = strcontains(aws_iam_role.provisioning.assume_role_policy, "StringNotLike") && strcontains(aws_iam_role.provisioning.assume_role_policy, "????????-????-????-????-????????????")
+    error_message = "the provisioning-role trust policy must constrain Team (StringNotLike) and RequestId (UUID shape)"
+  }
 }
 
 run "runner_role_is_minimal" {

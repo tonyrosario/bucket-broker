@@ -49,6 +49,24 @@ variable "kms_key_arn" {
   }
 }
 
+variable "team_role_permissions_boundary_arn" {
+  description = <<-EOT
+    Optional IAM permissions-boundary ARN to attach to the team role. When set,
+    the team role's effective permissions are capped to the intersection of its
+    attached policy and this boundary. The platform provisioner passes its
+    team-role boundary here so a compromised provisioning session cannot mint an
+    over-privileged role (#18 P0-2). Empty (default) => no boundary, preserving
+    standalone use of this module.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.team_role_permissions_boundary_arn == "" || can(regex("^arn:aws(-[a-z]+)*:iam::[0-9]{12}:policy/.+$", var.team_role_permissions_boundary_arn))
+    error_message = "team_role_permissions_boundary_arn must be empty or a valid IAM policy ARN."
+  }
+}
+
 variable "trusted_principals" {
   description = "List of IAM principal ARNs (roles or users) authorised to assume the team bucket-access IAM role. Must contain at least one entry."
   type        = list(string)

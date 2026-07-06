@@ -103,6 +103,21 @@ resource "aws_s3_bucket_policy" "audit" {
         Condition = { Bool = { "aws:SecureTransport" = "false" } }
       },
       {
+        # Tamper-resistance for the audit history: no principal may permanently
+        # delete an object (version) from this bucket. S3 Lifecycle expiration is
+        # service-driven and NOT evaluated against the bucket policy, so
+        # noncurrent-version pruning still works; CloudTrail only PUTs, so
+        # delivery is unaffected. This is the interim immutability control —
+        # scoped to deletes (never PutBucketVersioning) to avoid self-lockout of
+        # the module's own versioning management. Full Object Lock (COMPLIANCE)
+        # is deferred to the pending #20 Object Lock decision.
+        Sid       = "DenyAuditHistoryTamper"
+        Effect    = "Deny"
+        Principal = { AWS = "*" }
+        Action    = ["s3:DeleteObject", "s3:DeleteObjectVersion"]
+        Resource  = "${aws_s3_bucket.audit[0].arn}/*"
+      },
+      {
         Sid       = "AWSCloudTrailAclCheck"
         Effect    = "Allow"
         Principal = { Service = "cloudtrail.amazonaws.com" }

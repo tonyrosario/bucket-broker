@@ -35,6 +35,10 @@ resource "aws_lambda_function" "glue" { # tfsec:ignore:aws-lambda-enable-tracing
       STATUS_TABLE              = aws_dynamodb_table.status.name
       STATE_KEY_PREFIX          = local.state_key_prefix
       PROVISIONED_BUCKET_PREFIX = var.provisioned_bucket_prefix
+      # Mandatory permissions boundary the runner root attaches to every team
+      # role; the provisioning role's iam:CreateRole grant requires this exact
+      # ARN (#18 P0-2). The glue fails closed if it is unset.
+      TEAM_ROLE_PERMISSIONS_BOUNDARY_ARN = aws_iam_policy.team_role_boundary.arn
       # Concrete broker principal ARNs rendered into golden-bucket's
       # trusted_principals (ADR-0006, no OIDC federation).
       BROKER_PRINCIPAL_ARNS = jsonencode(var.broker_principal_arns)

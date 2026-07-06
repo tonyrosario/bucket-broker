@@ -7,10 +7,11 @@
 module "golden_bucket" {
   source = "../../golden-bucket"
 
-  bucket_name        = var.bucket_name
-  team               = var.team
-  owner              = var.owner
-  cost_center        = var.cost_center
-  path               = var.path
-  trusted_principals = var.trusted_principals
+  bucket_name                        = var.bucket_name
+  team                               = var.team
+  owner                              = var.owner
+  cost_center                        = var.cost_center
+  path                               = var.path
+  trusted_principals                 = var.trusted_principals
+  team_role_permissions_boundary_arn = var.team_role_permissions_boundary_arn
 }

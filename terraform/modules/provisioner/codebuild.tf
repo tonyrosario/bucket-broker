@@ -44,9 +44,26 @@ resource "aws_codebuild_project" "terraform_runner" {
           commands:
             - |
               set -euo pipefail
-              echo "[runner] Installing Terraform $${TF_VERSION}"
-              curl -sSfL "https://releases.hashicorp.com/terraform/$${TF_VERSION}/terraform_$${TF_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
-              unzip -q -o /tmp/terraform.zip -d /usr/local/bin
+              echo "[runner] Installing Terraform $${TF_VERSION} (SHA256 + GPG verified)"
+              cd /tmp
+              base="https://releases.hashicorp.com/terraform/$${TF_VERSION}"
+              zip="terraform_$${TF_VERSION}_linux_amd64.zip"
+              sums="terraform_$${TF_VERSION}_SHA256SUMS"
+              curl -sSfL "$${base}/$${zip}"        -o "$${zip}"
+              curl -sSfL "$${base}/$${sums}"       -o "$${sums}"
+              curl -sSfL "$${base}/$${sums}.sig" -o "$${sums}.sig"
+              # Import the HashiCorp release-signing PGP key over TLS and PIN its
+              # fingerprint: a swapped key would change the fingerprint and fail
+              # here, so an attacker cannot forge a matching signature.
+              HASHICORP_FPR="C874011F0AB405110D02105534365D9472D7468F"
+              curl -sSfL "https://www.hashicorp.com/.well-known/pgp-key.txt" | gpg --batch --import
+              gpg --batch --fingerprint "$${HASHICORP_FPR}"
+              # Signature over SHA256SUMS must be VALID and made by that exact key.
+              gpg --batch --verify --status-fd=1 "$${sums}.sig" "$${sums}" \
+                | grep -E "^\[GNUPG:\] VALIDSIG $${HASHICORP_FPR} " >/dev/null
+              # Now the checksum file is trusted — verify the zip against it.
+              grep " $${zip}$" "$${sums}" | sha256sum -c -
+              unzip -q -o "$${zip}" -d /usr/local/bin
               terraform version
         pre_build:
           commands:

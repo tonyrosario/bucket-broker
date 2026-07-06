@@ -40,5 +40,11 @@ export interface GlueConfig {
   statusTable: string;
   stateKeyPrefix: string;
   provisionedBucketPrefix: string;
+  /**
+   * ARN of the permissions boundary every provisioned team role MUST carry. The
+   * provisioning role's iam:CreateRole grant is conditioned on this exact ARN
+   * (iam.tf), so a compromised session cannot create an unbounded (admin) role.
+   */
+  teamRolePermissionsBoundaryArn: string;
   brokerPrincipalArns: string[];
 }

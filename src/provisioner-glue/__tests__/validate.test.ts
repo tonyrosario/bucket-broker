@@ -35,6 +35,7 @@ describe("validateRequest", () => {
     ["bucketName with shell metachars", { bucketName: "bucketbroker-a;rm -rf" }],
     ["bucketName uppercase", { bucketName: "bucketbroker-Data" }],
     ["bucketName underscore", { bucketName: "bucketbroker_data" }],
+    ["bucketName consecutive dots", { bucketName: "bucketbroker-a..b" }],
   ])("rejects %s", (_label, override) => {
     expect(() => validateRequest(goodRequest(override), PREFIX)).toThrow(ValidationError);
   });

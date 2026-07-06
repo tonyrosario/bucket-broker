@@ -12,10 +12,11 @@ const req: ValidatedRequest = {
 };
 
 const brokers = ["arn:aws:iam::123456789012:role/bucket-broker-request-handler"];
+const BOUNDARY = "arn:aws:iam::123456789012:policy/bb-test-team-role-boundary";
 
 describe("renderTfvarsJson", () => {
   it("produces the exact golden-bucket variable set", () => {
-    const out = JSON.parse(renderTfvarsJson(req, brokers)) as Record<string, unknown>;
+    const out = JSON.parse(renderTfvarsJson(req, brokers, BOUNDARY)) as Record<string, unknown>;
     expect(out).toEqual({
       bucket_name: "bucketbroker-platform-data",
       team: "platform",
@@ -23,12 +24,13 @@ describe("renderTfvarsJson", () => {
       cost_center: "CC-1234",
       path: "golden",
       trusted_principals: brokers,
+      team_role_permissions_boundary_arn: BOUNDARY,
     });
   });
 
   it("output is valid JSON that Terraform's *.auto.tfvars.json loader can parse", () => {
     expect(() => {
-      JSON.parse(renderTfvarsJson(req, brokers));
+      JSON.parse(renderTfvarsJson(req, brokers, BOUNDARY));
     }).not.toThrow();
   });
 
@@ -46,7 +48,7 @@ describe("renderTfvarsJson", () => {
       owner: 'evil"\n}\nvariable "backdoor" {\n default = "owned"\n}\n#${path.module}',
     };
 
-    const json = renderTfvarsJson(malicious, brokers);
+    const json = renderTfvarsJson(malicious, brokers, BOUNDARY);
 
     // The rendered text must not contain a raw (unescaped) closing-then-reopening
     // sequence — the quote before the newline is JSON-escaped as \".
@@ -59,13 +61,21 @@ describe("renderTfvarsJson", () => {
     expect(parsed["owner"]).toBe(malicious.owner);
     expect(parsed).not.toHaveProperty("backdoor");
     expect(Object.keys(parsed).sort()).toEqual(
-      ["bucket_name", "cost_center", "owner", "path", "team", "trusted_principals"].sort(),
+      [
+        "bucket_name",
+        "cost_center",
+        "owner",
+        "path",
+        "team",
+        "trusted_principals",
+        "team_role_permissions_boundary_arn",
+      ].sort(),
     );
   });
 
   it("escapes a bucket_name containing a double quote", () => {
     const malicious: ValidatedRequest = { ...req, bucketName: 'a"; evil = "x' };
-    const parsed = JSON.parse(renderTfvarsJson(malicious, brokers)) as Record<string, unknown>;
+    const parsed = JSON.parse(renderTfvarsJson(malicious, brokers, BOUNDARY)) as Record<string, unknown>;
     expect(parsed["bucket_name"]).toBe('a"; evil = "x');
     expect(parsed).not.toHaveProperty("evil");
   });
@@ -73,7 +83,11 @@ describe("renderTfvarsJson", () => {
 
 describe("buildTfvars", () => {
   it("passes broker principals through as trusted_principals (ADR-0006)", () => {
-    expect(buildTfvars(req, brokers).trusted_principals).toEqual(brokers);
+    expect(buildTfvars(req, brokers, BOUNDARY).trusted_principals).toEqual(brokers);
+  });
+
+  it("passes the permissions boundary through to the runner root", () => {
+    expect(buildTfvars(req, brokers, BOUNDARY).team_role_permissions_boundary_arn).toBe(BOUNDARY);
   });
 });
 

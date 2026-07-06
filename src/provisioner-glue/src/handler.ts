@@ -60,10 +60,25 @@ function loadConfig(): GlueConfig {
   const statusTable = process.env["STATUS_TABLE"];
   const stateKeyPrefix = process.env["STATE_KEY_PREFIX"] ?? "provisioned";
   const provisionedBucketPrefix = process.env["PROVISIONED_BUCKET_PREFIX"] ?? "";
+  const teamRolePermissionsBoundaryArn = process.env["TEAM_ROLE_PERMISSIONS_BOUNDARY_ARN"] ?? "";
   const brokerRaw = process.env["BROKER_PRINCIPAL_ARNS"] ?? "[]";
 
   if (!statusTable) {
     throw new Error("STATUS_TABLE environment variable is required");
+  }
+
+  // FAIL CLOSED: an empty prefix makes validate.ts `startsWith("")` always true,
+  // silently disabling the ABAC namespace binding (the bound that keeps a request
+  // inside the platform bucket namespace). Never provision without it.
+  if (!provisionedBucketPrefix) {
+    throw new Error("PROVISIONED_BUCKET_PREFIX environment variable is required");
+  }
+
+  // FAIL CLOSED: the provisioning role now REQUIRES every team role to carry this
+  // permissions boundary at CreateRole (iam.tf). Without it, golden-bucket's
+  // CreateRole is denied — so provisioning cannot proceed unbounded.
+  if (!teamRolePermissionsBoundaryArn) {
+    throw new Error("TEAM_ROLE_PERMISSIONS_BOUNDARY_ARN environment variable is required");
   }
 
   let brokerPrincipalArns: string[];
@@ -83,7 +98,13 @@ function loadConfig(): GlueConfig {
     throw new Error("BROKER_PRINCIPAL_ARNS must contain at least one broker principal ARN");
   }
 
-  return { statusTable, stateKeyPrefix, provisionedBucketPrefix, brokerPrincipalArns };
+  return {
+    statusTable,
+    stateKeyPrefix,
+    provisionedBucketPrefix,
+    teamRolePermissionsBoundaryArn,
+    brokerPrincipalArns,
+  };
 }
 
 async function writeProvisioning(
@@ -127,17 +148,23 @@ export async function handler(event: ProvisionRequest, context?: Context): Promi
   requestLogger.info("request validated");
 
   // 2. render injection-safe JSON tfvars
-  const tfvarsJson = renderTfvarsJson(req, config.brokerPrincipalArns);
+  const tfvarsJson = renderTfvarsJson(
+    req,
+    config.brokerPrincipalArns,
+    config.teamRolePermissionsBoundaryArn,
+  );
   const stateKey = stateKeyFor(config.stateKeyPrefix, req.requestId);
 
   // 3. idempotent PENDING -> PROVISIONING
   const params = provisioningUpdateParams(config.statusTable, req.requestId, new Date().toISOString());
   await writeProvisioning(requestLogger, params, req.requestId);
 
-  // 4. hand off to the CodeBuild apply
+  // 4. hand off to the CodeBuild apply. Return the VALIDATED correlationId
+  // (req.correlationId) — it passed the allowlist regex, whereas the raw
+  // `correlationId` above is only used to seed the logger before validation.
   return {
     requestId: req.requestId,
-    correlationId,
+    correlationId: req.correlationId,
     bucketName: req.bucketName,
     team: req.team,
     stateKey,

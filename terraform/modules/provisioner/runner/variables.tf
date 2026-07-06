@@ -39,3 +39,9 @@ variable "trusted_principals" {
   description = "Concrete platform broker principal ARNs the team role trusts (ADR-0006; no OIDC federation)."
   type        = list(string)
 }
+
+variable "team_role_permissions_boundary_arn" {
+  description = "ARN of the permissions boundary attached to the team role. The provisioning role's iam:CreateRole grant REQUIRES this exact boundary (#18 P0-2), so it must be supplied for a live apply; the glue renders it from the provisioner module output."
+  type        = string
+  default     = ""
+}

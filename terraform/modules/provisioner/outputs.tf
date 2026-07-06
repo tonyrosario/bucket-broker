@@ -42,6 +42,11 @@ output "provisioning_role_arn" {
   value       = aws_iam_role.provisioning.arn
 }
 
+output "team_role_permissions_boundary_arn" {
+  description = "ARN of the permissions boundary every provisioned team role must carry (#18 P0-2). The glue renders this into the runner's tfvars; the provisioning role's iam:CreateRole grant requires it."
+  value       = aws_iam_policy.team_role_boundary.arn
+}
+
 output "glue_function_name" {
   description = "Name of the glue (render/validate) Lambda function."
   value       = aws_lambda_function.glue.function_name
