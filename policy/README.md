@@ -38,8 +38,8 @@ The classifier evaluates the request `input`:
 | `versioning` | bool | yes | `true` |
 | `block_public_access` | object | yes | all four flags `true` |
 | `encryption` | object | yes | `{ "type": "platform_cmk", ... }` |
-| `acl` | string | no | absent or `private` |
-| `bucket_policy` | object | no | absent (golden path uses the module's generated policy only) |
+| `acl` | string | no | absent or `private` (case-insensitive); any other value escapes |
+| `bucket_policy` | object | no | absent or `null` (golden path uses the module's generated policy only; any non-null value escapes) |
 
 `block_public_access` object: `block_public_acls`, `block_public_policy`,
 `ignore_public_acls`, `restrict_public_buckets` — all must be `true`.
@@ -54,9 +54,12 @@ criterion and trips no trigger:
 
 - `region` ∈ `{us-east-1, us-east-2, us-west-2}`
 - `versioning` === `true`
-- all four Block-Public-Access flags === `true`
-- no public/cross-owner `acl` (absent or `private`)
-- no caller-supplied `bucket_policy`
+- all four Block-Public-Access flags **present and** === `true` (a missing flag
+  fails closed to `public_access`, not golden)
+- `acl` allowlist: absent or exactly `private` (case-insensitive). Any other
+  value — off-list canned ACLs (`aws-exec-read`, `bucket-owner-full-control`),
+  casing variants, or a non-string `acl` — is `public_access`
+- no non-null caller-supplied `bucket_policy`
 - `encryption.type` === `platform_cmk` (platform-managed CMK)
 - no unknown fields
 
@@ -68,8 +71,8 @@ TLS-only policy).
 
 | Reason | Fires when |
 |--------|-----------|
-| `public_access` | any BPA flag not `true` (or BPA not an object), a public canned ACL, or a bucket-policy statement with a `"*"` principal |
-| `custom_bucket_policy` | any caller-supplied `bucket_policy` is present |
+| `public_access` | any of the four BPA flags missing or not exactly `true` (or BPA not an object), an `acl` that is present and not exactly `private` (case-insensitive) — including non-string acl and casing variants — or a bucket-policy statement with a `"*"` principal |
+| `custom_bucket_policy` | any caller-supplied `bucket_policy` that is non-null (mere presence with `null` value does not trip) |
 | `cross_account_access` | a bucket-policy principal ARN names a different AWS account than `account_id` |
 | `off_standard_region` | `region` not in the standard set (or not a string) |
 | `versioning_disabled` | `versioning` is anything other than `true` |

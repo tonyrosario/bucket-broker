@@ -41,6 +41,14 @@ test_golden_baseline_is_golden if {
 test_golden_with_optional_private_acl_is_golden if {
 	decision := classifier.decision with input as object.union(golden_request, {"acl": "private"})
 	decision.classification == "golden"
+	decision.reasons == []
+}
+
+# Absent `acl` is the baseline golden shape (no acl key at all).
+test_golden_with_absent_acl_is_golden if {
+	decision := classifier.decision with input as golden_request
+	decision.classification == "golden"
+	decision.reasons == []
 }
 
 # ---------------------------------------------------------------------------
@@ -58,6 +66,22 @@ test_escape_bpa_flag_disabled if {
 	"public_access" in decision.reasons
 }
 
+# Fail-closed on a PARTIAL block_public_access object: exactly three of the four
+# flags present (restrict_public_buckets omitted). A missing flag must trip
+# public_access via negation-as-failure, not slip through as golden. Note the
+# BPA key is removed before re-adding, because object.union deep-merges nested
+# objects — a bare union would inherit the omitted flag from golden_request.
+test_escape_bpa_partial_missing_flag if {
+	partial := object.union(object.remove(golden_request, {"block_public_access"}), {"block_public_access": {
+		"block_public_acls": true,
+		"block_public_policy": true,
+		"ignore_public_acls": true,
+	}})
+	decision := classifier.decision with input as partial
+	decision.classification == "escape"
+	"public_access" in decision.reasons
+}
+
 test_escape_bpa_not_an_object if {
 	decision := classifier.decision with input as object.union(golden_request, {"block_public_access": "yes"})
 	decision.classification == "escape"
@@ -66,6 +90,29 @@ test_escape_bpa_not_an_object if {
 
 test_escape_public_acl if {
 	decision := classifier.decision with input as object.union(golden_request, {"acl": "public-read"})
+	decision.classification == "escape"
+	"public_access" in decision.reasons
+}
+
+# ACL allowlist: an off-list canned ACL (formerly slipped through as golden)
+# must escape.
+test_escape_off_list_acl if {
+	decision := classifier.decision with input as object.union(golden_request, {"acl": "aws-exec-read"})
+	decision.classification == "escape"
+	"public_access" in decision.reasons
+}
+
+# A casing variant of an off-list ACL must also escape (old denylist was
+# case-sensitive and let these through).
+test_escape_acl_casing_variant if {
+	decision := classifier.decision with input as object.union(golden_request, {"acl": "AWS-Exec-Read"})
+	decision.classification == "escape"
+	"public_access" in decision.reasons
+}
+
+# A non-string acl is unclassifiable → escape.
+test_escape_acl_not_a_string if {
+	decision := classifier.decision with input as object.union(golden_request, {"acl": 42})
 	decision.classification == "escape"
 	"public_access" in decision.reasons
 }
@@ -117,6 +164,7 @@ test_cross_account_detects_principal_in_array if {
 		"Action": "s3:GetObject",
 		"Resource": "arn:aws:s3:::acme-platform-data-prod/*",
 	}]}})
+	decision.classification == "escape"
 	"cross_account_access" in decision.reasons
 }
 

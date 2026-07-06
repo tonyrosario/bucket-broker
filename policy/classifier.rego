@@ -107,12 +107,16 @@ escape_reason contains "unknown_field" if {
 # Escape trigger: public access
 # ---------------------------------------------------------------------------
 
-# Any BPA flag not explicitly true (missing, false, or wrong type).
+# Any BPA flag not explicitly true (missing, false, or wrong type). Uses
+# negation-as-failure so a MISSING flag (undefined) also trips: `undefined !=
+# true` is undefined and would silently skip, whereas `not <flag> == true` is
+# true for a missing flag. Fail-closed: every one of the four flags must be
+# present and exactly `true`.
 escape_reason contains "public_access" if {
 	is_object(input)
 	is_object(input.block_public_access)
 	some flag in bpa_flags
-	input.block_public_access[flag] != true
+	not input.block_public_access[flag] == true
 }
 
 # block_public_access present but not an object => cannot prove it blocks.
@@ -122,7 +126,28 @@ escape_reason contains "public_access" if {
 	not is_object(input.block_public_access)
 }
 
-# A public / cross-owner canned ACL.
+# ACL allowlist (PRIMARY gate). The golden path permits `acl` to be absent or
+# exactly "private" (case-insensitive); ANY other value escapes. This inverts
+# the old public-ACL denylist — which let off-list canned ACLs (aws-exec-read,
+# bucket-owner-full-control, casing variants, …) slip through as golden — into
+# a closed allowlist, consistent with how custom_bucket_policy treats any
+# caller-supplied policy.
+escape_reason contains "public_access" if {
+	is_object(input)
+	"acl" in input_keys
+	is_string(input.acl)
+	lower(input.acl) != "private"
+}
+
+# acl present but not a string (number, object, null, …) — unclassifiable.
+escape_reason contains "public_access" if {
+	is_object(input)
+	"acl" in input_keys
+	not is_string(input.acl)
+}
+
+# Defense-in-depth: an explicitly public / cross-owner canned ACL. Subsumed by
+# the allowlist above but retained as a redundant, self-documenting guard.
 escape_reason contains "public_access" if {
 	is_object(input)
 	input.acl in public_acls
@@ -154,7 +179,6 @@ escape_reason contains "cross_account_access" if {
 	some principal in principal_aws_values(stmt.Principal)
 	principal != "*"
 	acct := arn_account(principal)
-	acct != ""
 	acct != input.account_id
 }
 
@@ -229,6 +253,15 @@ principal_aws_values(principal) := {principal.AWS} if {
 principal_aws_values(principal) := {v | some v in principal.AWS} if {
 	is_object(principal)
 	is_array(principal.AWS)
+}
+
+# Object principal with no `AWS` key (e.g. {"Service": ...}) — defined as the
+# empty set so downstream rules skip it explicitly rather than on an undefined
+# call. Such a request still escapes via custom_bucket_policy (any non-null
+# bucket_policy), so this only makes the AWS-principal skip explicit.
+principal_aws_values(principal) := set() if {
+	is_object(principal)
+	not principal.AWS
 }
 
 # Extract the account-id field (5th, zero-indexed 4) from an ARN. Returns ""
