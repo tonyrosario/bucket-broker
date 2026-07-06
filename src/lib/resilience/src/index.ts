@@ -13,6 +13,7 @@ export type { Clock, RandomFn } from "./clock";
 
 export {
   ResilienceError,
+  ControlFlowError,
   TimeoutError,
   CircuitOpenError,
   RetryBudgetExceededError,
@@ -21,7 +22,7 @@ export {
 
 export { withTimeout } from "./timeout";
 
-export { fullJitterDelay, runWithRetry } from "./retry";
+export { defaultIsRetryable, fullJitterDelay, runWithRetry } from "./retry";
 export type { RetryOptions, RetryContext } from "./retry";
 
 export { CircuitBreaker } from "./circuit-breaker";

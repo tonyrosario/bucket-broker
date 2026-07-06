@@ -50,7 +50,25 @@ export class CircuitBreaker {
     private readonly opts: CircuitBreakerOptions,
     private readonly clock: Clock,
     private readonly onTransition: OnTransition = () => undefined,
-  ) {}
+  ) {
+    // Reject misconfiguration that would silently fail OPEN (a breaker that can
+    // never trip, or trips on garbage) instead of surfacing it at wiring time.
+    if (opts.failureThreshold <= 0 || opts.failureThreshold > 1) {
+      throw new RangeError(
+        `CircuitBreaker "${opts.dependency}": failureThreshold must be in (0, 1], got ${opts.failureThreshold}`,
+      );
+    }
+    if (opts.minimumThroughput > opts.rollingCount) {
+      throw new RangeError(
+        `CircuitBreaker "${opts.dependency}": minimumThroughput (${opts.minimumThroughput}) must be <= rollingCount (${opts.rollingCount}); otherwise the window can never satisfy the throughput gate and the breaker never trips`,
+      );
+    }
+    if (opts.halfOpenMaxProbes < 1) {
+      throw new RangeError(
+        `CircuitBreaker "${opts.dependency}": halfOpenMaxProbes must be >= 1, got ${opts.halfOpenMaxProbes}`,
+      );
+    }
+  }
 
   get currentState(): BreakerState {
     return this.state;
@@ -86,6 +104,11 @@ export class CircuitBreaker {
   }
 
   onSuccess(): void {
+    // A probe from a prior generation can settle after the breaker has already
+    // re-opened. Ignore it so it can never leak into the next closed window.
+    if (this.state === "open") {
+      return;
+    }
     if (this.state === "half-open") {
       this.halfOpenInFlight = Math.max(0, this.halfOpenInFlight - 1);
       this.halfOpenSuccesses += 1;
@@ -99,6 +122,11 @@ export class CircuitBreaker {
   }
 
   onFailure(): void {
+    // Straggler from a prior generation (see onSuccess): the breaker is already
+    // open, so this outcome is stale — drop it rather than record it.
+    if (this.state === "open") {
+      return;
+    }
     if (this.state === "half-open") {
       // Any failure during probing re-opens the breaker for another cooldown.
       this.halfOpenInFlight = Math.max(0, this.halfOpenInFlight - 1);

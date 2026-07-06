@@ -1,8 +1,14 @@
 import { ResiliencePolicy } from "../src/policy";
 import type { ResiliencePolicyOptions } from "../src/policy";
 import { InMemoryIdempotencyStore } from "../src/idempotency";
+import { IdempotencyConflictError } from "../src/errors";
 import { InMemoryMetricsSink } from "../src/metrics";
 import { ManualClock } from "./manual-clock";
+
+/** Resolve after all currently-queued microtasks have drained. */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 function baseOptions(
   overrides: Partial<ResiliencePolicyOptions> = {},
@@ -103,5 +109,62 @@ describe("ResiliencePolicy", () => {
     expect(first).toBe("bucket-1");
     expect(second).toBe("bucket-1");
     expect(sideEffects).toBe(1);
+  });
+
+  it("does not let a concurrent same-key conflict poison breaker health", async () => {
+    const store = new InMemoryIdempotencyStore();
+    const metrics = new InMemoryMetricsSink();
+    // Thresholds that WOULD trip easily if a conflict were counted as a failure,
+    // proving the conflict is not recorded against the breaker.
+    const policy = new ResiliencePolicy(
+      baseOptions({
+        metrics,
+        idempotency: { store, ttlMs: 60_000 },
+        breaker: {
+          failureThreshold: 0.5,
+          rollingCount: 1,
+          minimumThroughput: 1,
+          openDurationMs: 100,
+          halfOpenMaxProbes: 1,
+          successThreshold: 1,
+        },
+      }),
+    );
+
+    // The winner holds the reservation open until we release the gate.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let sideEffects = 0;
+    const op = async (): Promise<string> => {
+      sideEffects += 1;
+      await gate;
+      return "provisioned";
+    };
+
+    const winner = policy.execute(op, { idempotencyKey: "dupe" });
+    // Let the winner reserve the key (get + putIfAbsent) before the loser races.
+    await flushMicrotasks();
+    const loser = policy.execute(op, { idempotencyKey: "dupe" });
+
+    // The loser sees the in-flight reservation as a conflict...
+    await expect(loser).rejects.toBeInstanceOf(IdempotencyConflictError);
+    // ...it never ran the op (its side effect never fired -> not retried)...
+    expect(sideEffects).toBe(1);
+    expect(metrics.ofType("retry")).toHaveLength(0);
+    // ...and it did NOT count against dependency health.
+    expect(policy.breakerState).toBe("closed");
+    expect(
+      metrics.ofType("call_result").some((e) => e.outcome === "failure"),
+    ).toBe(false);
+
+    // The winner still completes normally once released.
+    release();
+    await expect(winner).resolves.toBe("provisioned");
+    expect(policy.breakerState).toBe("closed");
+    expect(metrics.ofType("call_result").map((e) => e.outcome)).toEqual([
+      "success",
+    ]);
   });
 });

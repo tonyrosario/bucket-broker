@@ -1,5 +1,18 @@
 import type { Clock, RandomFn } from "./clock";
-import { RetryBudgetExceededError } from "./errors";
+import { ControlFlowError, RetryBudgetExceededError } from "./errors";
+
+/**
+ * Default retry classifier. Retries everything EXCEPT control-flow errors
+ * ({@link ControlFlowError}, e.g. an {@link IdempotencyConflictError} raised by
+ * a concurrent same-key submit, or a {@link CircuitOpenError}). Those describe
+ * the envelope's own flow, not a transient dependency fault, so retrying them
+ * only burns the budget (and, upstream, would count client concurrency as a
+ * dependency failure). Genuine dependency errors (timeouts, 5xx, etc.) stay
+ * retryable.
+ */
+export function defaultIsRetryable(err: unknown): boolean {
+  return !(err instanceof ControlFlowError);
+}
 
 /** Retry configuration. All delays are in milliseconds. */
 export interface RetryOptions {
@@ -16,7 +29,8 @@ export interface RetryOptions {
    */
   totalBudgetMs: number;
   /**
-   * Classifies an error as transient/retryable. Defaults to "retry everything".
+   * Classifies an error as transient/retryable. Defaults to
+   * {@link defaultIsRetryable} (retry everything except control-flow errors).
    * Non-retryable errors (e.g. a 4xx) short-circuit immediately.
    */
   isRetryable?: (err: unknown) => boolean;
@@ -77,7 +91,9 @@ export async function runWithRetry<T>(
     } catch (err) {
       lastErr = err;
 
-      const retryable = opts.isRetryable ? opts.isRetryable(err) : true;
+      const retryable = opts.isRetryable
+        ? opts.isRetryable(err)
+        : defaultIsRetryable(err);
       if (!retryable || attempt >= opts.maxAttempts) {
         throw err;
       }

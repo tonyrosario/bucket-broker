@@ -1,6 +1,10 @@
-import { fullJitterDelay, runWithRetry } from "../src/retry";
+import { defaultIsRetryable, fullJitterDelay, runWithRetry } from "../src/retry";
 import type { RetryOptions } from "../src/retry";
-import { RetryBudgetExceededError } from "../src/errors";
+import {
+  IdempotencyConflictError,
+  RetryBudgetExceededError,
+  TimeoutError,
+} from "../src/errors";
 import { ManualClock } from "./manual-clock";
 
 describe("fullJitterDelay", () => {
@@ -26,6 +30,17 @@ describe("fullJitterDelay", () => {
     // base * 2^10 would be huge; cap must dominate.
     const delay = fullJitterDelay(10, 100, 500, 0.999999);
     expect(delay).toBeLessThanOrEqual(500);
+  });
+});
+
+describe("defaultIsRetryable", () => {
+  it("does not retry control-flow errors", () => {
+    expect(defaultIsRetryable(new IdempotencyConflictError("k"))).toBe(false);
+  });
+
+  it("retries genuine dependency errors (timeouts, plain errors)", () => {
+    expect(defaultIsRetryable(new TimeoutError("dep", 1000))).toBe(true);
+    expect(defaultIsRetryable(new Error("5xx"))).toBe(true);
   });
 });
 
@@ -69,6 +84,39 @@ describe("runWithRetry", () => {
     );
     expect(result).toBe("recovered");
     expect(calls).toBe(3);
+  });
+
+  it("does not retry a control-flow error by default (never touches the budget)", async () => {
+    let calls = 0;
+    const clock = new ManualClock();
+    await expect(
+      runWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new IdempotencyConflictError("dupe"));
+        },
+        baseOpts, // no explicit isRetryable -> defaultIsRetryable applies
+        ctx(clock),
+      ),
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
+    expect(calls).toBe(1);
+    expect(clock.now()).toBe(0); // never slept
+  });
+
+  it("still retries genuine dependency errors under the default classifier", async () => {
+    let calls = 0;
+    const result = await runWithRetry(
+      () => {
+        calls += 1;
+        return calls < 2
+          ? Promise.reject(new TimeoutError("dep", 1000))
+          : Promise.resolve("ok");
+      },
+      baseOpts,
+      ctx(),
+    );
+    expect(result).toBe("ok");
+    expect(calls).toBe(2);
   });
 
   it("stops immediately on a non-retryable error", async () => {

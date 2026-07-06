@@ -11,6 +11,15 @@ export class ResilienceError extends Error {
   }
 }
 
+/**
+ * A resilience error that reflects the envelope's own control flow (client
+ * concurrency, the breaker gate) rather than the ill-health of the downstream
+ * dependency. These are NEVER retried by the default retry classifier and NEVER
+ * recorded against circuit-breaker health — retrying or counting them would let
+ * client behaviour poison a healthy dependency's breaker.
+ */
+export class ControlFlowError extends ResilienceError {}
+
 /** A wrapped call exceeded its bounded timeout. */
 export class TimeoutError extends ResilienceError {
   constructor(
@@ -24,9 +33,10 @@ export class TimeoutError extends ResilienceError {
 /**
  * The circuit breaker is open (or half-open with no probe slots) and no
  * fallback was supplied. This is the fail-closed fast-reject path: the call
- * never reaches the dependency and never silently succeeds.
+ * never reaches the dependency and never silently succeeds. Control-flow, not
+ * dependency health: the breaker gate decided this, so it is never retried.
  */
-export class CircuitOpenError extends ResilienceError {
+export class CircuitOpenError extends ControlFlowError {
   constructor(public readonly dependency: string) {
     super(`Circuit breaker for "${dependency}" is open; failing fast`);
   }
@@ -53,8 +63,10 @@ export class RetryBudgetExceededError extends ResilienceError {
 /**
  * An idempotency key is already reserved (`in_progress`) by another in-flight
  * execution. Surfaced fail-closed rather than risking a duplicate side effect.
+ * This reflects client concurrency (a legitimate double-submit), not dependency
+ * health, so it is never retried and never counts as a breaker failure.
  */
-export class IdempotencyConflictError extends ResilienceError {
+export class IdempotencyConflictError extends ControlFlowError {
   constructor(public readonly key: string) {
     super(`Idempotency key "${key}" is already in progress`);
   }

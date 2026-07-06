@@ -115,4 +115,55 @@ describe("CircuitBreaker", () => {
     breaker.onFailure();
     expect(breaker.currentState).toBe("closed");
   });
+
+  describe("constructor validation", () => {
+    it("rejects a failureThreshold outside (0, 1]", () => {
+      expect(() => makeBreaker({ failureThreshold: 0 })).toThrow(RangeError);
+      expect(() => makeBreaker({ failureThreshold: -0.1 })).toThrow(RangeError);
+      expect(() => makeBreaker({ failureThreshold: 1.5 })).toThrow(RangeError);
+    });
+
+    it("accepts the inclusive upper bound failureThreshold of 1", () => {
+      expect(() => makeBreaker({ failureThreshold: 1 })).not.toThrow();
+    });
+
+    it("rejects minimumThroughput greater than rollingCount (never trips)", () => {
+      expect(() =>
+        makeBreaker({ rollingCount: 4, minimumThroughput: 5 }),
+      ).toThrow(RangeError);
+    });
+
+    it("rejects halfOpenMaxProbes below 1", () => {
+      expect(() => makeBreaker({ halfOpenMaxProbes: 0 })).toThrow(RangeError);
+    });
+  });
+
+  it("ignores probe results that settle after the breaker re-opened", () => {
+    // halfOpenMaxProbes: 2 lets two probes be in flight; one can settle late.
+    const { breaker, clock, transitions } = makeBreaker({
+      halfOpenMaxProbes: 2,
+      successThreshold: 2,
+    });
+    for (let i = 0; i < 4; i++) {
+      breaker.tryAcquire();
+      breaker.onFailure();
+    }
+    expect(breaker.currentState).toBe("open");
+
+    clock.advance(100);
+    expect(breaker.tryAcquire()).toBe(true); // probe A
+    expect(breaker.tryAcquire()).toBe(true); // probe B
+    expect(breaker.currentState).toBe("half-open");
+
+    breaker.onFailure(); // probe B fails -> re-open (new generation)
+    expect(breaker.currentState).toBe("open");
+    const transitionsAfterReopen = transitions.length;
+
+    // Straggler probe A settles late; it belongs to the prior generation and
+    // must be a no-op -> no close, no transition, no stray recording.
+    breaker.onSuccess();
+    breaker.onFailure();
+    expect(breaker.currentState).toBe("open");
+    expect(transitions.length).toBe(transitionsAfterReopen);
+  });
 });

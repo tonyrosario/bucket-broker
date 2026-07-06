@@ -2,7 +2,7 @@ import { CircuitBreaker } from "./circuit-breaker";
 import type { CircuitBreakerOptions, BreakerState } from "./circuit-breaker";
 import { systemClock, systemRandom } from "./clock";
 import type { Clock, RandomFn } from "./clock";
-import { CircuitOpenError } from "./errors";
+import { CircuitOpenError, IdempotencyConflictError } from "./errors";
 import type { IdempotencyStore } from "./idempotency";
 import { withIdempotency } from "./idempotency";
 import { NoopMetricsSink } from "./metrics";
@@ -132,6 +132,15 @@ export class ResiliencePolicy {
       this.emitCallResult("success");
       return result;
     } catch (err) {
+      // A same-key conflict means another in-flight call already holds this
+      // idempotency reservation — client concurrency, exactly what idempotency
+      // exists to absorb, NOT dependency ill-health. Recording it would let a
+      // legitimate double-submit trip the breaker on a healthy dependency, and
+      // absorbing it in a fallback would hide the concurrency from the loser.
+      // Leave breaker state untouched, emit no failure metric, and surface it.
+      if (err instanceof IdempotencyConflictError) {
+        throw err;
+      }
       this.breaker.onFailure();
       this.emitCallResult("failure");
       if (exec.fallback) {

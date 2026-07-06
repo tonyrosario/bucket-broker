@@ -29,4 +29,21 @@ describe("withTimeout", () => {
       withTimeout(() => Promise.reject("string-fail"), 1000, "dep"),
     ).rejects.toBeInstanceOf(Error);
   });
+
+  it("surfaces a synchronous throw from op as a rejection (no timer leak)", async () => {
+    const setSpy = jest.spyOn(global, "setTimeout");
+    const clearSpy = jest.spyOn(global, "clearTimeout");
+    try {
+      await expect(
+        withTimeout(() => {
+          throw new Error("sync-boom");
+        }, 1000, "dep"),
+      ).rejects.toThrow("sync-boom");
+      // Every timer that was armed for this call was also cleared.
+      expect(clearSpy).toHaveBeenCalledTimes(setSpy.mock.calls.length);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
 });

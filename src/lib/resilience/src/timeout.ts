@@ -20,15 +20,20 @@ export async function withTimeout<T>(
       timer.unref();
     }
 
-    op().then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      },
-    );
+    // Route op() through a resolved promise so a SYNCHRONOUS throw from op
+    // becomes a rejection handled below (clearing the timer) rather than
+    // escaping the executor and leaking the pending timer.
+    Promise.resolve()
+      .then(op)
+      .then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        },
+      );
   });
 }
