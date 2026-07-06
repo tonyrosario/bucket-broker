@@ -1,0 +1,32 @@
+{
+  "name": "@bucket-broker/provisioner-glue",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provisioner glue Lambda: validate a provision request, render injection-safe JSON tfvars, and perform the idempotent PENDING->PROVISIONING status transition. Reuses @bucket-broker/logging + @bucket-broker/resilience.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src __tests__ --ext .ts",
+    "test": "jest --coverage",
+    "test:ci": "jest --coverage --ci --forceExit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.699.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.17.50",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
