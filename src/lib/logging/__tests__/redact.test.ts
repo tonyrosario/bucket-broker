@@ -46,8 +46,10 @@ describe("DEFAULT_DENYLIST", () => {
 
   it("includes PII/payment fields", () => {
     expect(DEFAULT_DENYLIST).toContain("ssn");
-    expect(DEFAULT_DENYLIST).toContain("pan");
+    // "pan" removed — matches benign keys like "company", "expand", "panel"
     expect(DEFAULT_DENYLIST).toContain("cvv");
+    expect(DEFAULT_DENYLIST).toContain("creditcard");
+    expect(DEFAULT_DENYLIST).toContain("cardnumber");
   });
 });
 
@@ -254,5 +256,173 @@ describe("redact — LogEntry-shaped object (integration check)", () => {
     expect(result["correlationId"]).toBe("uuid-1234");
     expect(result["userId"]).toBe("u-999");
     expect(result["level"]).toBe("info");
+  });
+});
+
+// ─── Security: compound/prefixed sensitive keys MUST be redacted ─────────────
+
+describe("redact — MUST redact (compound-key security coverage)", () => {
+  const dl = createDenylist();
+
+  it("redacts x-api-key (contains 'apikey' fragment)", () => {
+    const result = redact({ "x-api-key": "key-abc" }, dl) as Record<string, unknown>;
+    expect(result["x-api-key"]).toBe(REDACTED);
+  });
+
+  it("redacts client_secret (contains 'secret' fragment)", () => {
+    const result = redact({ client_secret: "shh" }, dl) as Record<string, unknown>;
+    expect(result["client_secret"]).toBe(REDACTED);
+  });
+
+  it("redacts dbSecret (contains 'secret' fragment)", () => {
+    const result = redact({ dbSecret: "db-pass" }, dl) as Record<string, unknown>;
+    expect(result["dbSecret"]).toBe(REDACTED);
+  });
+
+  it("redacts sessionToken (contains 'token' fragment)", () => {
+    const result = redact({ sessionToken: "sess-tok" }, dl) as Record<string, unknown>;
+    expect(result["sessionToken"]).toBe(REDACTED);
+  });
+
+  it("redacts x-amz-security-token (contains 'token' fragment)", () => {
+    const result = redact({ "x-amz-security-token": "aws-tok" }, dl) as Record<string, unknown>;
+    expect(result["x-amz-security-token"]).toBe(REDACTED);
+  });
+
+  it("redacts Set-Cookie (contains 'cookie' fragment)", () => {
+    const result = redact({ "Set-Cookie": "session=abc; HttpOnly" }, dl) as Record<string, unknown>;
+    expect(result["Set-Cookie"]).toBe(REDACTED);
+  });
+
+  it("redacts Cookie (contains 'cookie' fragment)", () => {
+    const result = redact({ Cookie: "session=abc" }, dl) as Record<string, unknown>;
+    expect(result["Cookie"]).toBe(REDACTED);
+  });
+
+  it("redacts userPassword (contains 'password' fragment)", () => {
+    const result = redact({ userPassword: "hunter2" }, dl) as Record<string, unknown>;
+    expect(result["userPassword"]).toBe(REDACTED);
+  });
+
+  it("redacts password nested inside a benign-named parent key", () => {
+    const result = redact(
+      { data: { password: "x" } },
+      dl,
+    ) as { data: Record<string, unknown> };
+    expect(result.data["password"]).toBe(REDACTED);
+    // The outer 'data' key is benign and must not be redacted
+    expect(typeof result.data).toBe("object");
+  });
+});
+
+// ─── No over-redaction: benign keys must pass through ─────────────────────────
+
+describe("redact — MUST NOT redact (benign key no-over-redaction)", () => {
+  const dl = createDenylist();
+
+  it("does not redact 'author'", () => {
+    const result = redact({ author: "Alice" }, dl) as Record<string, unknown>;
+    expect(result["author"]).toBe("Alice");
+  });
+
+  it("does not redact 'authorId'", () => {
+    const result = redact({ authorId: "u-1" }, dl) as Record<string, unknown>;
+    expect(result["authorId"]).toBe("u-1");
+  });
+
+  it("does not redact 'description'", () => {
+    const result = redact({ description: "A bucket for logs" }, dl) as Record<string, unknown>;
+    expect(result["description"]).toBe("A bucket for logs");
+  });
+
+  it("does not redact 'timestamp'", () => {
+    const result = redact(
+      { timestamp: "2026-07-06T00:00:00.000Z" },
+      dl,
+    ) as Record<string, unknown>;
+    expect(result["timestamp"]).toBe("2026-07-06T00:00:00.000Z");
+  });
+
+  it("does not redact 'shipping'", () => {
+    const result = redact({ shipping: "express" }, dl) as Record<string, unknown>;
+    expect(result["shipping"]).toBe("express");
+  });
+
+  it("does not redact 'count'", () => {
+    const result = redact({ count: 42 }, dl) as Record<string, unknown>;
+    expect(result["count"]).toBe(42);
+  });
+
+  it("does not redact 'region'", () => {
+    const result = redact({ region: "us-east-1" }, dl) as Record<string, unknown>;
+    expect(result["region"]).toBe("us-east-1");
+  });
+
+  it("does not redact 'service'", () => {
+    const result = redact({ service: "my-service" }, dl) as Record<string, unknown>;
+    expect(result["service"]).toBe("my-service");
+  });
+
+  it("does not redact 'spanId'", () => {
+    const result = redact({ spanId: "sp-1" }, dl) as Record<string, unknown>;
+    expect(result["spanId"]).toBe("sp-1");
+  });
+});
+
+// ─── Robustness: circular references ─────────────────────────────────────────
+
+describe("redact — circular reference safety", () => {
+  const dl = createDenylist();
+
+  it("does not throw on a self-referential object", () => {
+    const obj: Record<string, unknown> = { name: "test" };
+    obj["self"] = obj;
+    expect(() => redact(obj, dl)).not.toThrow();
+  });
+
+  it("replaces the circular back-reference with '[Circular]'", () => {
+    const obj: Record<string, unknown> = { name: "test" };
+    obj["self"] = obj;
+    const result = redact(obj, dl) as Record<string, unknown>;
+    expect(result["name"]).toBe("test");
+    expect(result["self"]).toBe("[Circular]");
+  });
+
+  it("handles indirect circular references (a → b → a)", () => {
+    const a: Record<string, unknown> = { label: "a" };
+    const b: Record<string, unknown> = { label: "b", parent: a };
+    a["child"] = b;
+    const result = redact(a, dl) as Record<string, unknown>;
+    expect(result["label"]).toBe("a");
+    expect((result["child"] as Record<string, unknown>)["label"]).toBe("b");
+    // The back-reference to 'a' inside 'b' must be replaced, not recursed.
+    expect((result["child"] as Record<string, unknown>)["parent"]).toBe("[Circular]");
+  });
+});
+
+// ─── Robustness: BigInt values ────────────────────────────────────────────────
+
+describe("redact — BigInt safety", () => {
+  const dl = createDenylist();
+
+  it("does not throw on a top-level BigInt value", () => {
+    expect(() => redact(BigInt(42), dl)).not.toThrow();
+  });
+
+  it("converts a top-level BigInt to its decimal string", () => {
+    expect(redact(BigInt(42), dl)).toBe("42");
+  });
+
+  it("converts a BigInt inside an object value to string", () => {
+    const result = redact({ count: BigInt(999) }, dl) as Record<string, unknown>;
+    expect(result["count"]).toBe("999");
+  });
+
+  it("converts BigInt inside an array element to string", () => {
+    const result = redact({ ids: [BigInt(1), BigInt(2)] }, dl) as {
+      ids: unknown[];
+    };
+    expect(result.ids[0]).toBe("1");
+    expect(result.ids[1]).toBe("2");
   });
 });

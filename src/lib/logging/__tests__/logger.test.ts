@@ -325,3 +325,108 @@ describe("Logger — redaction", () => {
     expect(entries[0].message).toBe("hello");
   });
 });
+
+// ─── Reserved-field collision protection ──────────────────────────────────────
+
+describe("Logger — reserved-field collision protection", () => {
+  it("'level' in data cannot overwrite the stable level field", () => {
+    const { logger, entries } = captureLogger();
+    logger.info("test msg", { level: "debug" });
+    // The emitted level must reflect the actual call (info), not the data field.
+    expect(entries[0].level).toBe("info");
+  });
+
+  it("'correlationId' in data cannot overwrite the stable correlationId", () => {
+    const { logger, entries } = captureLogger({ correlationId: "real-id" });
+    logger.info("test msg", { correlationId: "injected-id" });
+    expect(entries[0].correlationId).toBe("real-id");
+  });
+
+  it("'service' in data cannot overwrite the stable service field", () => {
+    const { logger, entries } = captureLogger();
+    logger.info("test msg", { service: "attacker" });
+    expect(entries[0].service).toBe("test-service");
+  });
+
+  it("'layer' in data cannot overwrite the stable layer field", () => {
+    const { logger, entries } = captureLogger();
+    logger.info("test msg", { layer: "injected-layer" });
+    expect(entries[0].layer).toBe("test-layer");
+  });
+
+  it("'message' in data cannot overwrite the stable message field", () => {
+    const { logger, entries } = captureLogger();
+    logger.info("real message", { message: "injected message" });
+    expect(entries[0].message).toBe("real message");
+  });
+
+  it("'timestamp' in data cannot overwrite the stable timestamp field", () => {
+    const { logger, entries } = captureLogger();
+    const before = new Date().toISOString();
+    logger.info("test msg", { timestamp: "1970-01-01T00:00:00.000Z" });
+    const after = new Date().toISOString();
+    // The emitted timestamp must be in the valid range, not the injected one.
+    expect(entries[0].timestamp >= before).toBe(true);
+    expect(entries[0].timestamp <= after).toBe(true);
+  });
+
+  it("'correlationId' in context cannot overwrite the stable correlationId", () => {
+    const { logger, entries } = captureLogger({
+      correlationId: "real-id",
+      context: { correlationId: "context-injected" },
+    });
+    logger.info("test msg");
+    expect(entries[0].correlationId).toBe("real-id");
+  });
+});
+
+// ─── Non-Error thrown values in error() ───────────────────────────────────────
+
+describe("Logger — non-Error values in error()", () => {
+  it("accepts a string error without throwing", () => {
+    const { logger, entries } = captureLogger();
+    expect(() => logger.error("caught string", "oops")).not.toThrow();
+    expect(entries[0].level).toBe("error");
+    expect(entries[0].message).toBe("caught string");
+  });
+
+  it("records errorType='string' and errorMessage for a string error", () => {
+    const { logger, entries } = captureLogger();
+    logger.error("string error", "something broke");
+    expect(entries[0]["errorType"]).toBe("string");
+    expect(entries[0]["errorMessage"]).toBe("something broke");
+  });
+
+  it("accepts a plain object error without throwing", () => {
+    const { logger, entries } = captureLogger();
+    expect(() => logger.error("caught object", { code: 42 })).not.toThrow();
+    expect(entries[0].level).toBe("error");
+  });
+
+  it("records errorType='object' for a plain object error", () => {
+    const { logger, entries } = captureLogger();
+    logger.error("object error", { code: 42 });
+    expect(entries[0]["errorType"]).toBe("object");
+  });
+
+  it("accepts null error without throwing", () => {
+    const { logger, entries } = captureLogger();
+    expect(() => logger.error("null error", null)).not.toThrow();
+    expect(entries[0].level).toBe("error");
+  });
+
+  it("records errorType='object' and errorMessage='null' for null error", () => {
+    const { logger, entries } = captureLogger();
+    logger.error("null error", null);
+    // typeof null === "object" is a well-known JS quirk
+    expect(entries[0]["errorType"]).toBe("object");
+    expect(entries[0]["errorMessage"]).toBe("null");
+  });
+
+  it("accepts a number error without throwing", () => {
+    const { logger, entries } = captureLogger();
+    expect(() => logger.error("number error", 404)).not.toThrow();
+    expect(entries[0]["errorType"]).toBe("number");
+    expect(entries[0]["errorMessage"]).toBe("404");
+  });
+});

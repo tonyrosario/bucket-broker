@@ -33,7 +33,23 @@ import { createDenylist, redact } from "./redact.js";
 import { annotateTrace } from "./xray.js";
 
 function defaultOutput(entry: LogEntry): void {
-  process.stdout.write(JSON.stringify(entry) + "\n");
+  try {
+    process.stdout.write(JSON.stringify(entry) + "\n");
+  } catch {
+    // Fallback for non-serialisable values (e.g. a BigInt that slipped
+    // through redact, or some other exotic type).  Emit the six stable
+    // schema fields so the log line is still parseable.
+    const safe = {
+      level: entry.level,
+      timestamp: entry.timestamp,
+      correlationId: entry.correlationId,
+      message: entry.message,
+      service: entry.service,
+      layer: entry.layer,
+      _serialisationError: "log entry contained a non-JSON-serialisable value",
+    };
+    process.stdout.write(JSON.stringify(safe) + "\n");
+  }
 }
 
 export class Logger {
@@ -82,14 +98,19 @@ export class Logger {
 
   private emit(level: LogLevel, message: string, data?: Record<string, unknown>): void {
     const raw: LogEntry = {
+      // Merge context and call-site data first so the stable schema fields
+      // declared below always win and cannot be overwritten by callers.
+      // This guarantees CloudWatch metric filters keyed on level / service /
+      // correlationId / etc. are never corrupted by user-supplied data.
+      ...this.context,
+      ...data,
+      // Stable schema fields — always declared last; always present and correct.
       level,
       timestamp: new Date().toISOString(),
       correlationId: this.correlationId,
       message,
       service: this.service,
       layer: this.layer,
-      ...this.context,
-      ...data,
     };
     const redacted = redact(raw, this.denylist) as LogEntry;
     this.outputFn(redacted);
@@ -113,17 +134,29 @@ export class Logger {
   /**
    * Emit an ERROR-level structured log entry.
    *
-   * When an Error object is provided its constructor name, message, and
+   * When an `Error` object is provided its constructor name, message, and
    * stack are added to the entry as `errorType`, `errorMessage`, and `stack`.
+   * When any other value is thrown (TypeScript `catch` blocks yield `unknown`),
+   * `errorType` is set to `typeof error` and `errorMessage` to `String(error)`.
+   *
    * These stable names allow CloudWatch metric filters such as:
    *   `{ $.level = "error" && $.service = "request-handler" }`
+   *
+   * @param error  The caught value — may be an `Error`, a string, an object,
+   *               `null`, or any other value a `catch` block can produce.
    */
-  error(message: string, error?: Error, data?: Record<string, unknown>): void {
+  error(message: string, error?: unknown, data?: Record<string, unknown>): void {
     const errorFields: Record<string, unknown> = {};
     if (error !== undefined) {
-      errorFields["errorType"] = error.constructor.name;
-      errorFields["errorMessage"] = error.message;
-      errorFields["stack"] = error.stack;
+      if (error instanceof Error) {
+        errorFields["errorType"] = error.constructor.name;
+        errorFields["errorMessage"] = error.message;
+        errorFields["stack"] = error.stack;
+      } else {
+        // Handle non-Error thrown values (strings, plain objects, null, etc.)
+        errorFields["errorType"] = typeof error;
+        errorFields["errorMessage"] = String(error);
+      }
     }
     this.emit("error", message, { ...errorFields, ...data });
   }
