@@ -10,5 +10,7 @@ are permanent and never reused. A superseded ADR keeps its number and gains a
 | [0002](0002-rest-api-thin-web-form.md) | REST API + thin web form as the entry point | Accepted |
 | [0003](0003-audited-escape-paths.md) | Human-approved, fully-audited escape paths (OPA-classified) | Accepted |
 | [0004](0004-third-party-resilience.md) | Resilience to third-party outages (circuit breaker + cached fallback) | Accepted |
+| [0005](0005-nodejs-typescript-lambdas.md) | Node.js / TypeScript for platform Lambdas | Accepted |
+| [0006](0006-platform-brokered-team-role-authz.md) | Platform-brokered team-role authorization | Accepted |
 
 New ADRs start from [`template.md`](template.md).
