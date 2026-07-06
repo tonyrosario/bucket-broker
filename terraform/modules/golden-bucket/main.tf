@@ -186,6 +186,34 @@ resource "aws_s3_bucket_policy" "bucket" {
         ]
         Resource = [aws_s3_bucket.bucket.arn, "${aws_s3_bucket.bucket.arn}/*"]
       },
+      {
+        # Encryption-pinning (#10 review): a PutObject SSE request header
+        # overrides the bucket default, so without these Denies a writer could
+        # store objects under SSE-S3 or a foreign KMS key, defeating the module's
+        # single-revocable-CMK guarantee. The Null guard means the Deny fires only
+        # when the header is present, so default-encrypted (header-less) writes
+        # still succeed under the module CMK.
+        Sid       = "DenyIncorrectEncryptionHeader"
+        Effect    = "Deny"
+        Principal = { AWS = "*" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.bucket.arn}/*"
+        Condition = {
+          Null            = { "s3:x-amz-server-side-encryption" = "false" }
+          StringNotEquals = { "s3:x-amz-server-side-encryption" = "aws:kms" }
+        }
+      },
+      {
+        Sid       = "DenyWrongKMSKey"
+        Effect    = "Deny"
+        Principal = { AWS = "*" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.bucket.arn}/*"
+        Condition = {
+          Null            = { "s3:x-amz-server-side-encryption-aws-kms-key-id" = "false" }
+          StringNotEquals = { "s3:x-amz-server-side-encryption-aws-kms-key-id" = local.kms_key_arn }
+        }
+      },
     ]
   })
 

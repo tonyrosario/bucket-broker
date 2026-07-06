@@ -31,6 +31,15 @@ mock_provider "aws" {
       json = "{}"
     }
   }
+
+  # Provide a valid ARN so aws_iam_role_policy_attachment's ARN validation
+  # passes under `command = apply` (mock_provider otherwise generates a
+  # non-ARN string). Needed by the encryption_pinning_enforced run.
+  mock_resource "aws_iam_policy" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:policy/mock-team-crud"
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -202,6 +211,34 @@ run "escape_path_existing_kms_key" {
   assert {
     condition     = local.tags["path"] == "escape"
     error_message = "path tag must be 'escape' when the path variable is 'escape'."
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Test 6 — encryption-pinning: writes must land under the module CMK (#10 review)
+# Uses command = apply so the rendered bucket-policy JSON is known (references
+# the bucket ARN, unknown at plan). mock_provider supplies the values.
+# ---------------------------------------------------------------------------
+run "encryption_pinning_enforced" {
+  variables {
+    bucket_name        = "acme-data-pin-9902"
+    team               = "data"
+    owner              = "data@acme.example.com"
+    cost_center        = "CC-9999"
+    kms_key_arn        = "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+    trusted_principals = ["arn:aws:iam::123456789012:role/data-team-runner"]
+  }
+
+  command = apply
+
+  assert {
+    condition     = strcontains(aws_s3_bucket_policy.bucket.policy, "DenyIncorrectEncryptionHeader") && strcontains(aws_s3_bucket_policy.bucket.policy, "DenyWrongKMSKey")
+    error_message = "Bucket policy must include the encryption-pinning deny statements (deny non-KMS SSE and deny wrong KMS key)."
+  }
+
+  assert {
+    condition     = strcontains(aws_s3_bucket_policy.bucket.policy, "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab")
+    error_message = "Encryption-pinning deny must reference the module CMK ARN."
   }
 }
 

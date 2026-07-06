@@ -64,12 +64,6 @@ variable "trusted_principals" {
   }
 }
 
-variable "aws_region" {
-  description = "AWS region in which resources are deployed."
-  type        = string
-  default     = "us-east-1"
-}
-
 variable "noncurrent_version_expiration_days" {
   description = "Days after which noncurrent object versions are permanently deleted. Applies only when versioning is enabled."
   type        = number
