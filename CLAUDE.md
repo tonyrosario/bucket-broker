@@ -31,3 +31,11 @@ Before opening a PR, run the reviewer agents that match the diff, then
 One worktree per issue (`AGENTS.md` has the claiming and shared-file rules).
 Wave order: tracer bullet (#16) runs solo first; wave 1 (#9–#14) fans out in
 parallel; wave 2 (#17–#19) is released only as its blockers merge.
+
+### Local overrides
+
+`.claude/settings.local.json` is a machine-local, gitignored override — never
+commit it. Do not use it to re-allow a denied command: deny always wins over
+allow in Claude Code regardless of which settings file the rule is in, so a
+re-grant (this repo's local file re-allows `gh api`) is both inert and
+misleading policy.
